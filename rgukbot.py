@@ -29,7 +29,7 @@ SCHEDULES_DIR = 'schedules_folder'
 RETAKES_DIR = 'retakes_folder'
 DB_PATH = 'users_vuz.db'
 
-# Базы данных в памяти и кэши
+# --- базы данных/кеши ---
 schedule_db = {}
 retake_db = {}
 group_to_file = {}
@@ -39,7 +39,7 @@ global_update_time_sch = ""
 global_update_time_ret = ""
 is_updating = False
 
-# Константы
+# --- константы ---
 DAY_NAMES = {0: 'понедельник', 1: 'вторник', 2: 'среда', 3: 'четверг', 4: 'пятница', 5: 'суббота', 6: 'воскресенье'}
 DAY_SHORTS = {0: 'ПН', 1: 'ВТ', 2: 'СР', 3: 'ЧТ', 4: 'ПТ', 5: 'СБ'}
 
@@ -68,14 +68,6 @@ def log_to_admin(text):
         bot.send_message(ADMIN_ID, f"<code>[system]</code> {text}", parse_mode='HTML')
     except Exception:
         pass
-
-
-def get_update_time_global():
-    return global_update_time_sch
-
-
-def get_update_time_global_retakes():
-    return global_update_time_ret
 
 
 def get_target_date():
@@ -127,7 +119,7 @@ def get_week_type(date):
 
 
 def extract_row_lesson(row, wt):
-    """Извлекает и нормализует данные о паре из строки таблицы расписания."""
+    """извлекает и нормализует данные о паре из строки таблицы расписания."""
     if wt == "нечетная":
         sub, tea, room, tp = row.iloc[6], row.iloc[5], row.iloc[3], row.iloc[4]
     else:
@@ -146,7 +138,7 @@ def extract_row_lesson(row, wt):
 
 
 def merge_lesson_halves(lessons, match_keys=('sub', 'room')):
-    """Объединяет половинки пар (например, 1️⃣ и 🔹) в один диапазон времени."""
+    """объединяет половинки пар"""
     merged = []
     can_m = True
     for c in lessons:
@@ -167,11 +159,38 @@ def merge_lesson_halves(lessons, match_keys=('sub', 'room')):
     return merged
 
 
+def format_lesson(l, header_line, show_tea=True, show_room=True):
+    res = f"{header_line}\n📚 <b>{l['sub']}</b>\n"
+    if l.get('type'):
+        res += f"  📝 {TYPE_EXPAND.get(l['type'].lower(), l['type'])}\n"
+    if show_tea and l.get('tea'):
+        res += f"  👨‍🏫 {l['tea']}\n"
+    if show_room and l.get('room'):
+        res += f"  🚪 {l['room']}\n"
+    return res + "\n"
+
+
 def parse_user_date(text: str) -> datetime.date | None:
-    """Распознает дату из строки: дни недели, относительные смещения, словесные и числовые даты."""
     if not text:
         return None
     text_lower = text.strip().lower()
+
+    # -1. относительные дни: сегодня, завтра, послезавтра, вчера, позавчера, позапозавчера...
+    today = datetime.datetime.now().date()
+    if text_lower == "сегодня":
+        return today
+    if text_lower == "завтра":
+        return today + datetime.timedelta(days=1)
+    if text_lower == "вчера":
+        return today - datetime.timedelta(days=1)
+    if "послезавтра" in text_lower:
+        prefix = text_lower.split("послезавтра")[0]
+        extra = prefix.count("после")
+        return today + datetime.timedelta(days=2 + extra)
+    if "позавчера" in text_lower:
+        prefix = text_lower.split("позавчера")[0]
+        extra = prefix.count("поза")
+        return today - datetime.timedelta(days=2 + extra)
 
     months = {
         "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
@@ -282,26 +301,25 @@ def parse_user_date(text: str) -> datetime.date | None:
 
 
 def get_schedule_view(target_type, target, date):
-    """Единый диспетчер для формирования текста расписания и клавиатуры навигации."""
+    """единый диспетчер для формирования текста расписания и клавиатуры навигации."""
     prefix = get_warnings(date)
-    if target_type == 'r':
-        text = prefix + generate_room_text(target, date)
-        kb = nav_kb(target, date, is_room=True)
-    elif target_type == 't':
-        text = prefix + generate_teacher_text(target, date)
-        kb = nav_kb(target, date, is_teacher=True)
-    else:
-        text = prefix + generate_text(target, date)
-        kb = nav_kb(target, date)
+    generators = {'r': generate_room_text, 't': generate_teacher_text}
+    text = prefix + generators.get(target_type, generate_text)(target, date)
+    kb = nav_kb(target, date, target_type)
     return text, kb
 
 
-def get_all_rooms():
-    return all_rooms_cache
+def _latest_update_str(pattern):
+    """возвращает строку с временем последнего обновления файлов по паттерну."""
+    files = glob.glob(pattern)
+    if files:
+        latest = max(os.path.getmtime(f) for f in files)
+        return f"🕒 база обновлена: {datetime.datetime.fromtimestamp(latest).strftime('%d.%m %H:%M')}"
+    return ""
 
 
 def update_caches():
-    """Обновляет кэш аудиторий, преподавателей и времени обновления файлов."""
+    """обновляет кэш аудиторий, преподавателей и времени обновления файлов."""
     global all_rooms_cache, all_teachers_cache, global_update_time_sch, global_update_time_ret
     rooms = set()
     teachers = set()
@@ -323,22 +341,10 @@ def update_caches():
                         teachers.add(t)
             except Exception:
                 continue
-    all_rooms_cache = sorted(list(rooms))
-    all_teachers_cache = sorted(list(teachers))
-
-    sch_files = glob.glob(os.path.join(SCHEDULES_DIR, "*.xlsx"))
-    if sch_files:
-        latest = max(os.path.getmtime(f) for f in sch_files)
-        global_update_time_sch = f"🕒 база обновлена: {datetime.datetime.fromtimestamp(latest).strftime('%d.%m %H:%M')}"
-    else:
-        global_update_time_sch = ""
-
-    ret_files = glob.glob(os.path.join(RETAKES_DIR, "*"))
-    if ret_files:
-        latest = max(os.path.getmtime(f) for f in ret_files)
-        global_update_time_ret = f"🕒 база обновлена: {datetime.datetime.fromtimestamp(latest).strftime('%d.%m %H:%M')}"
-    else:
-        global_update_time_ret = ""
+    all_rooms_cache = sorted(rooms)
+    all_teachers_cache = sorted(teachers)
+    global_update_time_sch = _latest_update_str(os.path.join(SCHEDULES_DIR, "*.xlsx"))
+    global_update_time_ret = _latest_update_str(os.path.join(RETAKES_DIR, "*"))
 
 
 # --- клавиатуры ---
@@ -346,7 +352,7 @@ def update_caches():
 def main_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("📅 моё расписание"))
-    kb.row(KeyboardButton("👩‍🎓 расписание преподавателя"), KeyboardButton("🚪 поиск аудитории"))
+    kb.row(KeyboardButton("👩‍🎓 расписание преподавателя"), KeyboardButton("🚪 расписание аудитории"))
     kb.row(KeyboardButton("📄 график пересдач"))
     kb.row(KeyboardButton("🔄 сменить группу"))
     return kb
@@ -358,13 +364,12 @@ def cancel_kb():
     return kb
 
 
-def nav_kb(target, date, is_teacher=False, is_room=False):
+def nav_kb(target, date, prefix="d"):
     kb = InlineKeyboardMarkup()
-    p = "r" if is_room else ("t" if is_teacher else "d")
     kb.row(
-        InlineKeyboardButton("⬅️", callback_data=f"{p}|{target}|{date - datetime.timedelta(days=1)}"),
-        InlineKeyboardButton("📅", callback_data=f"c|{p}|{target}"),
-        InlineKeyboardButton("➡️", callback_data=f"{p}|{target}|{date + datetime.timedelta(days=1)}")
+        InlineKeyboardButton("⬅️", callback_data=f"{prefix}|{target}|{date - datetime.timedelta(days=1)}"),
+        InlineKeyboardButton("📅", callback_data=f"c|{prefix}|{target}"),
+        InlineKeyboardButton("➡️", callback_data=f"{prefix}|{target}|{date + datetime.timedelta(days=1)}")
     )
     return kb
 
@@ -482,9 +487,7 @@ def process_retake_df(df):
             if entry[k].lower() == 'nan': entry[k] = ''
 
         for g in groups:
-            if g not in retake_db:
-                retake_db[g] = []
-            retake_db[g].append(entry)
+            retake_db.setdefault(g, []).append(entry)
 
 
 def load_retakes_from_local():
@@ -646,11 +649,7 @@ def generate_text(group, date):
 
     res = ""
     for l in merged:
-        res += f"{l['num']} ({l['time']})\n📚 <b>{l['sub']}</b>\n"
-        if l['type']: res += f"  📝 {TYPE_EXPAND.get(l['type'].lower(), l['type'])}\n"
-        if l['tea']:  res += f"  👨‍🏫 {l['tea']}\n"
-        if l['room']: res += f"  🚪 {l['room']}\n"
-        res += "\n"
+        res += format_lesson(l, f"{l['num']} ({l['time']})")
     return header + res.strip() + footer
 
 
@@ -664,14 +663,8 @@ def generate_retakes_text(group):
 
     res = f"📑 <b>расписание пересдач для группы {group.lower()}:</b>\n\n"
     for l in merged:
-        res += f"📅 {l['date']} | ⏰ {l['time']}\n📚 <b>{l['sub']}</b>\n"
-        if l['type']: res += f"  📝 {TYPE_EXPAND.get(l['type'].lower(), l['type'])}\n"
-        if l['tea']:  res += f"  👨‍🏫 {l['tea']}\n"
-        if l['room']: res += f"  🚪 {l['room']}\n"
-        res += "\n"
-
-    footer = f"<i>{get_update_time_global_retakes()}</i>"
-    return res + footer
+        res += format_lesson(l, f"📅 {l['date']} | ⏰ {l['time']}")
+    return res + f"<i>{global_update_time_ret}</i>"
 
 
 def generate_teacher_text(teacher_full_name, date):
@@ -698,7 +691,7 @@ def generate_teacher_text(teacher_full_name, date):
         all_merged_lessons.extend(merged_grp)
 
     header = f"👨‍🏫 <b>{teacher_full_name.lower()}</b>\n📅 {DAY_NAMES[date.weekday()]}, {date.strftime('%d.%m.%Y')}\n🔄 {wt} неделя\n\n"
-    footer = f"\n\n<i>{get_update_time_global()}</i>"
+    footer = f"\n\n<i>{global_update_time_sch}</i>"
     if not all_merged_lessons: return header + "занятий не найдено" + footer
 
     grouped = {}
@@ -708,14 +701,11 @@ def generate_teacher_text(teacher_full_name, date):
         grouped[key].add(m['group'])
 
     flat = sorted(
-        [{'time': k[0], 'num': k[1], 'sub': k[2], 'room': k[3], 'type': k[4], 'groups': sorted(list(g))}
+        [{'time': k[0], 'num': k[1], 'sub': k[2], 'room': k[3], 'type': k[4], 'groups': sorted(g)}
          for k, g in grouped.items()], key=lambda x: x['time'])
     res = ""
     for l in flat:
-        res += f"{l['num']} ({l['time']}) — гр. {', '.join(l['groups'])}\n📚 <b>{l['sub']}</b>\n"
-        if l['type']: res += f"  📝 {TYPE_EXPAND.get(l['type'].lower(), l['type'])}\n"
-        if l['room']: res += f"  🚪 {l['room']}\n"
-        res += "\n"
+        res += format_lesson(l, f"{l['num']} ({l['time']}) — гр. {', '.join(l['groups'])}", show_tea=False)
     return header + res.strip() + footer
 
 
@@ -724,7 +714,7 @@ def generate_room_text(room, date):
     header = (f"🚪 аудитория: <b>{room.lower()}</b>\n"
               f"📅 {DAY_NAMES[date.weekday()]}, {date.strftime('%d.%m.%Y')}\n"
               f"🔄 {wt} неделя\n\n")
-    footer = f"\n\n<i>{get_update_time_global()}</i>"
+    footer = f"\n\n<i>{global_update_time_sch}</i>"
 
     if date.weekday() == 6:
         return header + "🎉 выходной — аудитория свободна весь день" + footer
@@ -774,13 +764,7 @@ def generate_room_text(room, date):
         res += "<b>занято:</b>\n\n"
         for l in merged:
             groups_str = ", ".join(sorted(l['groups']))
-            tp = TYPE_EXPAND.get(l['type'].lower(), l['type']) if l['type'] else ""
-            res += f"{l['num']} ({l['time']}) — гр. {groups_str}\n📚 <b>{l['sub']}</b>\n"
-            if tp:
-                res += f"  📝 {tp}\n"
-            if l['tea']:
-                res += f"  👨‍🏫 {l['tea']}\n"
-            res += "\n"
+            res += format_lesson(l, f"{l['num']} ({l['time']}) — гр. {groups_str}", show_room=False)
 
     free_slots = [s for i, s in enumerate(LESSON_SLOTS) if i not in occupied_slot_nums]
     if free_slots:
@@ -885,46 +869,59 @@ def teacher_search_start(m):
     bot.register_next_step_handler(msg, teacher_name_filter)
 
 
+def _do_search(m, items, sel_prefix, view_type, next_step_fn, min_len=1):
+    """Общая логика поиска: фильтрация, выбор из нескольких, показ результата."""
+    q = m.text.strip().lower()
+    if len(q) < min_len:
+        label = "буквы" if min_len >= 3 else "символ"
+        msg = bot.send_message(m.chat.id, f"❌ минимум {min_len} {label}", reply_markup=cancel_kb())
+        bot.register_next_step_handler(msg, next_step_fn)
+        return
+
+    found = sorted(t for t in items if q in t.lower())
+    if not found:
+        bot.send_message(m.chat.id, "❌ не найдено", reply_markup=main_kb())
+    elif len(found) > 1:
+        kb = make_selection_kb(found, sel_prefix)
+        bot.send_message(m.chat.id, "❗ найдено несколько, выбери:", reply_markup=cancel_kb())
+        bot.send_message(m.chat.id, "варианты:", reply_markup=kb)
+        bot.register_next_step_handler(m, next_step_fn)
+    else:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        bot.send_message(m.chat.id, "✅ найдено", reply_markup=main_kb())
+        text, kb = get_schedule_view(view_type, found[0], get_target_date())
+        bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
+
+
+def _sel_callback(c, view_type):
+    """Общий обработчик выбора из inline-кнопок."""
+    bot.answer_callback_query(c.id)
+    bot.clear_step_handler_by_chat_id(c.message.chat.id)
+    name = c.data.split('|')[1]
+    bot.send_message(c.message.chat.id, "✅ выбрано", reply_markup=main_kb())
+    text, kb = get_schedule_view(view_type, name, get_target_date())
+    bot.send_message(c.message.chat.id, text, parse_mode='HTML', reply_markup=kb)
+
+
 def teacher_name_filter(m):
     if m.text.lower() == "❌ отмена":
         bot.send_message(m.chat.id, "❌ поиск отменен", reply_markup=main_kb())
         return
-    q = m.text.strip().lower()
-    if q in ("преподаватель кафедры", "препод. кафедры"):
+    if m.text.strip().lower() in ("преподаватель кафедры", "препод. кафедры"):
         bot.send_message(m.chat.id, "❌ не смешно", reply_markup=main_kb())
         return
-    if len(q) < 3:
-        msg = bot.send_message(m.chat.id, "❌ минимум 3 буквы", reply_markup=cancel_kb())
-        bot.register_next_step_handler(msg, teacher_name_filter)
-        return
-
-    found = [t for t in all_teachers_cache if q in t.lower()]
-    if not found:
-        bot.send_message(m.chat.id, "❌ преподаватель не найден", reply_markup=main_kb())
-    elif len(found) > 1:
-        kb = make_selection_kb(found, "teach_sel", max_items=10)
-        bot.send_message(m.chat.id, "❗ найдено несколько, выбери:", reply_markup=cancel_kb())
-        bot.send_message(m.chat.id, "варианты:", reply_markup=kb)
-        bot.register_next_step_handler(m, teacher_name_filter)
-    else:
-        bot.clear_step_handler_by_chat_id(m.chat.id)
-        teacher = found[0]
-        bot.send_message(m.chat.id, "✅ преподаватель найден", reply_markup=main_kb())
-        text, kb = get_schedule_view('t', teacher, get_target_date())
-        bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
+    _do_search(m, all_teachers_cache, "teach_sel", "t", teacher_name_filter, min_len=3)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('teach_sel|'))
 def teacher_sel_callback(c):
-    bot.answer_callback_query(c.id)
-    bot.clear_step_handler_by_chat_id(c.message.chat.id)
     name = c.data.split('|')[1]
     if name.lower() in ("преподаватель кафедры", "препод. кафедры"):
+        bot.answer_callback_query(c.id)
+        bot.clear_step_handler_by_chat_id(c.message.chat.id)
         bot.send_message(c.message.chat.id, "❌ не смешно", reply_markup=main_kb())
         return
-    bot.send_message(c.message.chat.id, "✅ расписание выбрано", reply_markup=main_kb())
-    text, kb = get_schedule_view('t', name, get_target_date())
-    bot.send_message(c.message.chat.id, text, parse_mode='HTML', reply_markup=kb)
+    _sel_callback(c, "t")
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('c|'))
@@ -973,7 +970,7 @@ def handle_group_input(m):
         text, kb = get_schedule_view('d', found, get_target_date())
         bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
     else:
-        bot.send_message(m.chat.id, "😢 группа не найдена, попробуй еще раз через меню", reply_markup=main_kb())
+        bot.send_message(m.chat.id, "😢 группа не найдена, попробуй еще раз", reply_markup=main_kb())
 
 
 @bot.message_handler(func=lambda m: m.text.lower() == "📅 моё расписание")
@@ -1000,12 +997,15 @@ def nav_cb_handler(c):
 @bot.message_handler(commands=['start'])
 def start(m):
     msg = (f"привет! 👋\n\nэтот <b>неофициальный</b> бот показывает расписание для студентов ргу им. косыгина\n\n"
-           f"просто <b>напиши название своей группы</b> (например: эби-124) и я тебя запомню!\n\n\n\n"
+           f"просто <b>напиши название своей группы</b> (например: эби-124) и я тебя запомню!\n"
+           f"после этого ты можешь <b>написать любую дату или день недели</b> "
+           f"(<i>завтра, вчера, среда, 15.09, след пт, 8 декабря</i>) — и я покажу расписание на этот день. \n\n"
+           f"также можно искать <b>расписание преподавателей и свободные аудитории</b> через меню 👇\n\n"
            f"<i>⚠️ внимание: бот сохраняет связку твоего id и выбранной группы. ты можешь удалить свои данные в любой момент с помощью команды /delete.</i>")
     bot.send_message(m.chat.id, msg, parse_mode='HTML', reply_markup=main_kb())
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "🚪 поиск аудитории")
+@bot.message_handler(func=lambda m: m.text.lower() == "🚪 расписание аудитории")
 def room_search_start(m):
     msg = bot.send_message(m.chat.id, "📝 введи номер аудитории:", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, process_room_search)
@@ -1015,43 +1015,35 @@ def process_room_search(m):
     if m.text.lower() == "❌ отмена":
         bot.send_message(m.chat.id, "❌ поиск отменен", reply_markup=main_kb())
         return
-    q = m.text.strip().lower()
-    if len(q) < 1:
-        msg = bot.send_message(m.chat.id, "❌ введи хотя бы 1 символ", reply_markup=cancel_kb())
-        bot.register_next_step_handler(msg, process_room_search)
-        return
-
-    all_rooms = get_all_rooms()
-    found = sorted([r for r in all_rooms if q in r.lower()])
-
-    if not found:
-        bot.send_message(m.chat.id, "❌ аудитория не найдена", reply_markup=main_kb())
-    elif len(found) > 1:
-        kb = make_selection_kb(found, "room_sel", max_items=15)
-        bot.send_message(m.chat.id, "❗ найдено несколько, выбери:", reply_markup=cancel_kb())
-        bot.send_message(m.chat.id, "варианты:", reply_markup=kb)
-        bot.register_next_step_handler(m, process_room_search)
-    else:
-        bot.clear_step_handler_by_chat_id(m.chat.id)
-        room = found[0]
-        bot.send_message(m.chat.id, "✅ аудитория найдена", reply_markup=main_kb())
-        text, kb = get_schedule_view('r', room, get_target_date())
-        bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
+    _do_search(m, all_rooms_cache, "room_sel", "r", process_room_search)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('room_sel|'))
 def room_sel_callback(c):
-    bot.answer_callback_query(c.id)
-    bot.clear_step_handler_by_chat_id(c.message.chat.id)
-    room = c.data.split('|')[1]
-    bot.send_message(c.message.chat.id, "✅ аудитория выбрана", reply_markup=main_kb())
-    text, kb = get_schedule_view('r', room, get_target_date())
-    bot.send_message(c.message.chat.id, text, parse_mode='HTML', reply_markup=kb)
+    _sel_callback(c, "r")
 
 
 @bot.message_handler(func=lambda m: True)
 def last_handle(m):
-    handle_group_input(m)
+    g = get_user_group(m.from_user.id)
+    if g:
+        # Группа уже есть — пробуем распознать дату
+        date = parse_user_date(m.text)
+        if date:
+            text, kb = get_schedule_view('d', g, date)
+            bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
+        else:
+            bot.send_message(
+                m.chat.id,
+                "❌ не удалось распознать дату.\n\n"
+                "<i>попробуй ввести дату цифрами или словами:\n"
+                "'15.09', 'след вт', 'пт через 2 недели', 'среда'</i>",
+                parse_mode='HTML',
+                reply_markup=main_kb()
+            )
+    else:
+        # Группы нет — пробуем установить группу
+        handle_group_input(m)
 
 
 # --- запуск ---
