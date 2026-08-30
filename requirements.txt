@@ -1,0 +1,10 @@
+pyTelegramBotAPI
+pandas
+openpyxl
+flask
+gunicorn
+requests
+urllib3
+python-dotenv
+beautifulsoup4
+python-docx
