@@ -29,7 +29,7 @@ SCHEDULES_DIR = 'schedules_folder'
 RETAKES_DIR = 'retakes_folder'
 DB_PATH = 'users_vuz.db'
 
-# Базы данных в памяти и кэши
+# --- базы данных ---
 schedule_db = {}
 retake_db = {}
 group_to_file = {}
@@ -39,7 +39,7 @@ global_update_time_sch = ""
 global_update_time_ret = ""
 is_updating = False
 
-# Константы
+# --- константы ---
 DAY_NAMES = {0: 'понедельник', 1: 'вторник', 2: 'среда', 3: 'четверг', 4: 'пятница', 5: 'суббота', 6: 'воскресенье'}
 DAY_SHORTS = {0: 'ПН', 1: 'ВТ', 2: 'СР', 3: 'ЧТ', 4: 'ПТ', 5: 'СБ'}
 
