@@ -111,7 +111,7 @@ def get_lesson_number(time_str):
 
 
 def get_week_type(date):
-    # Учебный год начинается в сентябре (для дат до августа считаем прошлый год)
+    # логика расчета четной/нечетной недели
     start_year = date.year if date.month >= 8 else date.year - 1
     ref = datetime.date(start_year, 9, 1)
     diff = (date - datetime.timedelta(days=date.weekday()) - (ref - datetime.timedelta(days=ref.weekday()))).days // 7
@@ -612,12 +612,24 @@ def download_schedules():
     load_from_local()
 
 
-def midnight_updater():
+UPDATE_HOURS = [(6, 0), (14, 0), (21, 0)]
+
+
+def scheduled_updater():
     while True:
         now = datetime.datetime.now()
-        target = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(0, 0, 5))
-        time.sleep((target - now).total_seconds())
+        candidates = []
+        for h, m in UPDATE_HOURS:
+            t = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if t > now:
+                candidates.append(t)
+            else:
+                candidates.append(t + datetime.timedelta(days=1))
+        next_run = min(candidates)
+        sleep_sec = (next_run - now).total_seconds()
+        time.sleep(sleep_sec)
         download_schedules()
+
 
 
 # --- генерация расписания ---
@@ -784,6 +796,12 @@ def generate_room_text(room, date):
 @bot.message_handler(func=lambda m: is_updating)
 def bot_blocked(m):
     bot.send_message(m.chat.id, "⏳ идет обновление базы данных, пожалуйста, подожди")
+
+
+@bot.callback_query_handler(func=lambda c: is_updating)
+def callback_blocked(c):
+    bot.answer_callback_query(c.id, "⏳ идет обновление базы данных, пожалуйста, подожди", show_alert=True)
+
 
 
 @bot.message_handler(commands=['info'])
@@ -1054,7 +1072,7 @@ if __name__ == '__main__':
 
     load_from_local()
 
-    Thread(target=midnight_updater, daemon=True).start()
+    Thread(target=scheduled_updater, daemon=True).start()
 
     print("бот запущен и готов к работе!")
     while True:
