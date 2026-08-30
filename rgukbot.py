@@ -24,6 +24,7 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
+LOG_CHAT_ID = int(os.getenv('LOG_CHAT_ID')) if os.getenv('LOG_CHAT_ID') else ADMIN_ID
 SCHEDULE_PAGE_URL = "https://rguk.ru/students/schedule/"
 SCHEDULES_DIR = 'schedules_folder'
 RETAKES_DIR = 'retakes_folder'
@@ -65,9 +66,9 @@ LESSON_SLOTS = [
 def log_to_admin(text):
     print(text, flush=True)
     try:
-        bot.send_message(ADMIN_ID, f"<code>[system]</code> {text}", parse_mode='HTML')
-    except Exception:
-        pass
+        bot.send_message(LOG_CHAT_ID, f"<code>[system]</code> {text}", parse_mode='HTML')
+    except Exception as e:
+        print(f"ошибка отправки лога в Telegram: {e}", flush=True)
 
 
 def get_target_date():
