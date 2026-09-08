@@ -7,12 +7,14 @@ import requests
 import urllib3
 import sqlite3
 import os
+import shutil
 import glob
 from threading import Thread
 from bs4 import BeautifulSoup
 import urllib.parse
 import docx
 import re
+import hashlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,6 +26,7 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
+#если нужно чтобы бот не срал в логи можно добавить в ENV LOG_CHAT_ID чтобы например он срал в канал
 LOG_CHAT_ID = int(os.getenv('LOG_CHAT_ID')) if os.getenv('LOG_CHAT_ID') else ADMIN_ID
 SCHEDULE_PAGE_URL = "https://rguk.ru/students/schedule/"
 SCHEDULES_DIR = 'schedules_folder'
@@ -348,6 +351,92 @@ def update_caches():
     global_update_time_ret = _latest_update_str(os.path.join(RETAKES_DIR, "*"))
 
 
+# --- система отслеживания изменений расписания ---
+
+def snapshot_schedules(groups):
+    """создаёт хеш-снимок расписания для указанных групп для последующего сравнения."""
+    snapshot = {}
+    for g in groups:
+        df = schedule_db.get(g)
+        if df is not None:
+            try:
+                snapshot[g] = hashlib.md5(df.to_csv(index=False).encode()).hexdigest()
+            except Exception:
+                snapshot[g] = None
+        else:
+            snapshot[g] = None
+    return snapshot
+
+
+def notify_schedule_changes(old_snapshot, new_snapshot, group_users):
+    """сравнивает снимки расписания и отправляет уведомления пользователям изменённых групп.
+
+    запускается в отдельном потоке после успешного обновления базы.
+    уведомляет только если для группы БЫЛО расписание и оно ИЗМЕНИЛОСЬ
+    (чтобы не спамить при первом запуске).
+    также уведомляет если группа исчезла из расписания (выпуск/расформирование).
+    """
+    changed_groups = []
+    removed_groups = []
+    for group in new_snapshot:
+        old_hash = old_snapshot.get(group)
+        new_hash = new_snapshot.get(group)
+        if old_hash is not None and new_hash is not None and old_hash != new_hash:
+            changed_groups.append(group)
+        elif old_hash is not None and new_hash is None:
+            # группа была, но исчезла из нового расписания
+            removed_groups.append(group)
+
+    if not changed_groups and not removed_groups:
+        log_to_admin("📊 расписание не изменилось, уведомления не нужны")
+        return
+
+    notified = 0
+    failed = 0
+
+    # уведомления об изменениях
+    if changed_groups:
+        log_to_admin(f"📢 изменения в расписании для {len(changed_groups)} групп: {', '.join(changed_groups)}")
+        for group in changed_groups:
+            users = group_users.get(group, [])
+            for user_id in users:
+                try:
+                    bot.send_message(
+                        user_id,
+                        f"📢 <b>расписание обновлено!</b>\n\n"
+                        f"расписание для группы <b>{group}</b> изменилось.\n"
+                        f"нажми «📅 моё расписание» чтобы проверить.",
+                        parse_mode='HTML',
+                        reply_markup=main_kb()
+                    )
+                    notified += 1
+                    time.sleep(0.05)
+                except Exception:
+                    failed += 1
+
+    # уведомления об исчезнувших группах
+    if removed_groups:
+        log_to_admin(f"⚠️ группы исчезли из расписания: {', '.join(removed_groups)}")
+        for group in removed_groups:
+            users = group_users.get(group, [])
+            for user_id in users:
+                try:
+                    bot.send_message(
+                        user_id,
+                        f"⚠️ <b>группа {group} больше не найдена в расписании.</b>\n\n"
+                        f"возможно, группа была расформирована или переименована.\n"
+                        f"нажми «🔄 сменить группу» чтобы выбрать новую.",
+                        parse_mode='HTML',
+                        reply_markup=main_kb()
+                    )
+                    notified += 1
+                    time.sleep(0.05)
+                except Exception:
+                    failed += 1
+
+    log_to_admin(f"📢 уведомления отправлены: {notified} успешно, {failed} не доставлено")
+
+
 # --- клавиатуры ---
 
 def main_kb():
@@ -438,6 +527,16 @@ def get_all_users():
 def delete_user(user_id):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+
+
+def get_users_by_group():
+    """возвращает словарь {group_name: [user_id, ...]} для всех пользователей с группой."""
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute("SELECT user_id, group_name FROM users WHERE group_name IS NOT NULL").fetchall()
+    result = {}
+    for user_id, group_name in rows:
+        result.setdefault(group_name, []).append(user_id)
+    return result
 
 
 # --- парсинг данных ---
@@ -576,42 +675,92 @@ def download_schedules():
     global is_updating, schedule_db, group_to_file, retake_db
     is_updating = True
     log_to_admin("🔄 запуск полного обновления базы")
-    schedule_db.clear()
-    group_to_file.clear()
-    retake_db.clear()
 
-    for d in [SCHEDULES_DIR, RETAKES_DIR]:
-        os.makedirs(d, exist_ok=True)
-        for f in glob.glob(os.path.join(d, "*")):
+    # 1. снимок текущего расписания для отслеживания изменений
+    group_users = get_users_by_group()
+    relevant_groups = set(group_users.keys())
+    old_snapshot = snapshot_schedules(relevant_groups)
+
+    # 2. подготовка временных директорий для безопасного скачивания
+    temp_sch_dir = SCHEDULES_DIR + '_tmp'
+    temp_ret_dir = RETAKES_DIR + '_tmp'
+
+    for d in [temp_sch_dir, temp_ret_dir]:
+        if os.path.exists(d):
+            shutil.rmtree(d)
+        os.makedirs(d)
+
+    # 3. скачивание с бесконечным retry при 0 расписаний
+    sch_count = 0
+    ret_count = 0
+    attempt = 0
+
+    while True:
+        attempt += 1
+
+        # при повторной попытке очищаем временные директории
+        if attempt > 1:
+            for d in [temp_sch_dir, temp_ret_dir]:
+                for f in glob.glob(os.path.join(d, "*")):
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
+
+        urls = get_all_schedule_links()
+        if not urls:
+            delay = min(DOWNLOAD_RETRY_DELAY * attempt, DOWNLOAD_MAX_DELAY)
+            log_to_admin(f"⚠️ попытка {attempt}: не найдено ссылок, повтор через {delay} сек...")
+            time.sleep(delay)
+            continue
+
+        sch_count = 0
+        ret_count = 0
+
+        log_to_admin(f"📥 попытка {attempt}: скачивание ({len(urls)} ссылок)")
+        for url in urls:
+            filename = urllib.parse.unquote(url.split('/')[-1])
+            is_retake = any(w in filename.lower() for w in ('повтор', 'пересдач', 'аттестац'))
+            target_dir = temp_ret_dir if is_retake else temp_sch_dir
             try:
-                os.remove(f)
+                resp = requests.get(url, timeout=25, verify=False)
+                if resp.status_code == 200:
+                    with open(os.path.join(target_dir, filename), 'wb') as f:
+                        f.write(resp.content)
+                    if is_retake:
+                        ret_count += 1
+                    else:
+                        sch_count += 1
             except Exception:
                 pass
 
-    urls = get_all_schedule_links()
-    sch_count = 0
-    ret_count = 0
+        if sch_count > 0:
+            log_to_admin(f"✅ скачано: {sch_count} расписаний, {ret_count} пересдач")
+            break
 
-    log_to_admin("📥 начинаю скачивание файлов расписаний и пересдач")
-    for url in urls:
-        filename = urllib.parse.unquote(url.split('/')[-1])
-        is_retake = any(w in filename.lower() for w in ('повтор', 'пересдач', 'аттестац'))
-        target_dir = RETAKES_DIR if is_retake else SCHEDULES_DIR
-        try:
-            resp = requests.get(url, timeout=25, verify=False)
-            if resp.status_code == 200:
-                with open(os.path.join(target_dir, filename), 'wb') as f:
-                    f.write(resp.content)
-                if is_retake:
-                    ret_count += 1
-                else:
-                    sch_count += 1
-        except Exception:
-            pass
+        delay = min(DOWNLOAD_RETRY_DELAY * attempt, DOWNLOAD_MAX_DELAY)
+        log_to_admin(f"⚠️ попытка {attempt}: скачано 0 расписаний! повтор через {delay} сек...")
+        time.sleep(delay)
 
-    log_to_admin(f"✅ скачано: {sch_count} расписаний, {ret_count} пересдач")
+    # 4. замена старых директорий на новые (атомарная подмена)
+    for real_dir, tmp_dir in [(SCHEDULES_DIR, temp_sch_dir), (RETAKES_DIR, temp_ret_dir)]:
+        if os.path.exists(real_dir):
+            shutil.rmtree(real_dir)
+        os.rename(tmp_dir, real_dir)
+
+    # 5. загрузка данных из файлов
     load_from_local()
 
+    # 6. проверка изменений и уведомления (в отдельном потоке)
+    if schedule_db:
+        new_snapshot = snapshot_schedules(relevant_groups)
+        Thread(target=notify_schedule_changes, args=(old_snapshot, new_snapshot, group_users), daemon=True).start()
+    else:
+        log_to_admin("⚠️ после загрузки schedule_db пуст, уведомления пропущены")
+
+
+DOWNLOAD_RETRY_DELAY = 30   # базовая задержка в секундах
+DOWNLOAD_MAX_DELAY = 300    # максимальная задержка (5 минут)
 
 UPDATE_HOURS = [(6, 0), (14, 0), (21, 0)]
 
