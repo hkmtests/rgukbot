@@ -56,21 +56,51 @@ TYPE_EXPAND = {
 }
 
 _MONTHS = {
-    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
-    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12
+    "январь": 1, "января": 1, "янв": 1,
+    "февраль": 2, "февраля": 2, "фев": 2, "февр": 2,
+    "март": 3, "марта": 3, "мар": 3,
+    "апрель": 4, "апреля": 4, "апр": 4,
+    "май": 5, "мая": 5,
+    "июнь": 6, "июня": 6, "июн": 6,
+    "июль": 7, "июля": 7, "июл": 7,
+    "август": 8, "августа": 8, "авг": 8,
+    "сентябрь": 9, "сентября": 9, "сен": 9, "сент": 9,
+    "октябрь": 10, "октября": 10, "окт": 10,
+    "ноябрь": 11, "ноября": 11, "ноя": 11, "нояб": 11,
+    "декабрь": 12, "декабря": 12, "дек": 12,
 }
 
 _DAYS_OF_WEEK = {
-    "пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2, "среду": 2,
-    "чт": 3, "четверг": 3, "пт": 4, "пятница": 4, "пятницу": 4, "сб": 5, "суббота": 5,
-    "субботу": 5, "вс": 6, "воскресенье": 6
+    "пн": 0, "понедельник": 0, "понедельника": 0, "понедельнику": 0, "понедельником": 0,
+    "вт": 1, "вторник": 1, "вторника": 1, "вторнику": 1, "вторником": 1,
+    "ср": 2, "среда": 2, "среды": 2, "среде": 2, "среду": 2, "средой": 2,
+    "чт": 3, "четверг": 3, "четверга": 3, "четвергу": 3, "четвергом": 3,
+    "пт": 4, "пятница": 4, "пятницы": 4, "пятнице": 4, "пятницу": 4, "пятницей": 4,
+    "сб": 5, "суббота": 5, "субботы": 5, "субботе": 5, "субботу": 5, "субботой": 5,
+    "вс": 6, "воскресенье": 6, "воскресенья": 6, "воскресенью": 6, "воскресеньем": 6,
 }
 
 _WORD_TO_NUM = {
-    "одну": 1, "одной": 1, "одна": 1, "один": 1, "две": 2, "два": 2, "двух": 2,
-    "три": 3, "трёх": 3, "трех": 3, "четыре": 4, "четырёх": 4, "четырех": 4,
-    "пять": 5, "пяти": 5, "шесть": 6, "шести": 6, "семь": 7, "семи": 7,
-    "восемь": 8, "восьми": 8, "девять": 9, "девяти": 9, "десять": 10, "десяти": 10,
+    "одну": 1, "одной": 1, "одна": 1, "один": 1, "одного": 1, "первую": 1, "первой": 1, "первый": 1, "первая": 1,
+    "две": 2, "два": 2, "двух": 2, "пару": 2, "пары": 2, "пара": 2, "вторую": 2, "второй": 2, "вторая": 2,
+    "три": 3, "трёх": 3, "трех": 3, "третью": 3, "третьей": 3, "третья": 3, "третий": 3,
+    "четыре": 4, "четырёх": 4, "четырех": 4, "четвертую": 4, "четвертой": 4, "четвертая": 4, "четвертый": 4,
+    "пять": 5, "пяти": 5, "пятую": 5, "пятой": 5, "пятая": 5, "пятый": 5,
+    "шесть": 6, "шести": 6, "шестую": 6, "шестой": 6, "шестая": 6,
+    "семь": 7, "семи": 7, "седьмую": 7, "седьмой": 7, "седьмая": 7,
+    "восемь": 8, "восьми": 8, "восьмую": 8, "восьмой": 8, "восьмая": 8,
+    "девять": 9, "девяти": 9, "девятую": 9, "девятой": 9, "девятая": 9,
+    "десять": 10, "десяти": 10, "десятую": 10, "десятой": 10, "десятая": 10,
+    "ноль": 0,
+    "одиннадцать": 11, "одиннадцати": 11, "двенадцать": 12, "двенадцати": 12,
+    "тринадцать": 13, "тринадцати": 13, "четырнадцать": 14, "четырнадцати": 14,
+    "пятнадцать": 15, "пятнадцати": 15, "шестнадцать": 16, "шестнадцати": 16,
+    "семнадцать": 17, "семнадцати": 17, "восемнадцать": 18, "восемнадцати": 18,
+    "девятнадцать": 19, "девятнадцати": 19, "двадцать": 20, "двадцати": 20,
+    "тридцать": 30, "тридцати": 30, "сорок": 40, "сорока": 40,
+    "пятьдесят": 50, "пятидесяти": 50, "шестьдесят": 60, "шестидесяти": 60,
+    "семьдесят": 70, "семидесяти": 70, "восемьдесят": 80, "восьмидесяти": 80,
+    "девяносто": 90, "девяноста": 90, "сто": 100, "ста": 100,
 }
 
 _REJECTED_TEACHERS = ("преподаватель кафедры", "препод. кафедры")
@@ -253,97 +283,117 @@ def _format_lesson_body(sub, type_str="", tea="", room=""):
     return res + "\n"
 
 
-def _resolve_year(day, month):
-    now = datetime.datetime.now().date()
+def _resolve_year(day, month, now=None):
+    now = now or datetime.datetime.now().date()
     target = datetime.date(now.year, month, day)
     return datetime.date(now.year - 1, month, day) if (target - now).days > 180 else target
 
 
-def parse_user_date(text: str) -> datetime.date | None:
+def _date_offset_number(text):
+    if not text:
+        return 1
+    if text.isdecimal():
+        return int(text)
+    words = text.split()
+    if len(words) == 1:
+        return _WORD_TO_NUM.get(text)
+    if (len(words) == 2 and _WORD_TO_NUM.get(words[0], 0) in range(20, 100, 10)
+            and 0 < _WORD_TO_NUM.get(words[1], 0) < 10):
+        return _WORD_TO_NUM[words[0]] + _WORD_TO_NUM[words[1]]
+    return None
+
+
+def parse_user_date(text: str, today=None) -> datetime.date | None:
     """Распознает дату из строки: дни недели, относительные смещения, словесные и числовые даты."""
     if not text:
         return None
-    text_lower = text.strip().lower()
+    text_lower = ' '.join(text.lower().replace('ё', 'е').split()).strip(' .,!?')
+    text_lower = re.sub(r'^(?:расписание\s+)?(?:на\s+|во?\s+)?', '', text_lower)
+    now = today or datetime.datetime.now().date()
+    try:
+        if text_lower == 'сегодня':
+            return now
 
-    parts = text_lower.split()
-    target_wd = None
-    has_next = False
-    weeks_offset = 0
+        m_vchera = re.fullmatch(r'((?:поза[-\s]*)*)вчера', text_lower)
+        if m_vchera:
+            count = len(re.findall(r'поза', m_vchera.group(1))) + 1
+            return now - datetime.timedelta(days=count)
 
-    for word in parts:
-        if word in _DAYS_OF_WEEK:
-            target_wd = _DAYS_OF_WEEK[word]
+        m_zavtra = re.fullmatch(r'((?:после[-\s]*)*)завтра', text_lower)
+        if m_zavtra:
+            count = len(re.findall(r'после', m_zavtra.group(1))) + 1
+            return now + datetime.timedelta(days=count)
 
-    for word in parts:
-        if word in ["след", "след.", "следующий", "следующая", "следующую"]:
-            has_next = True
-        elif "прошл" in word:
-            prefix = word.split("прошл")[0]
-            poza_count = prefix.count("поза") if prefix else 0
-            weeks_offset = -(1 + poza_count)
+        # День недели
+        parts = text_lower.split()
+        weekday_indices = [i for i, w in enumerate(parts) if w.rstrip('.') in _DAYS_OF_WEEK]
+        target_wd = None
+        if len(weekday_indices) == 1:
+            idx = weekday_indices[0]
+            target_wd = _DAYS_OF_WEEK[parts[idx].rstrip('.')]
+            to_remove = {idx}
+            if idx > 0 and parts[idx - 1] in ('в', 'во', 'на'):
+                to_remove.add(idx - 1)
+            parts = [w for i, w in enumerate(parts) if i not in to_remove]
+        elif weekday_indices:
+            return None
 
-    for i, word in enumerate(parts):
-        if word == "через":
-            for j in range(i + 1, len(parts)):
-                if parts[j].isdigit():
-                    weeks_offset = int(parts[j])
-                    break
-                elif parts[j] in _WORD_TO_NUM:
-                    weeks_offset = _WORD_TO_NUM[parts[j]]
-                    break
-                elif parts[j] in ("неделю", "нед", "нед."):
-                    weeks_offset = 1
-                    break
-        elif word == "назад":
-            num_found = 0
-            for j in range(i - 1, -1, -1):
-                if parts[j].isdigit():
-                    num_found = int(parts[j])
-                    break
-                elif parts[j] in _WORD_TO_NUM:
-                    num_found = _WORD_TO_NUM[parts[j]]
-                    break
-                elif parts[j] in ("неделю", "нед", "нед.", "недель", "недели"):
-                    if j > 0:
-                        continue
-                    else:
-                        num_found = 1
-                        break
-            if num_found == 0:
-                num_found = 1
-            weeks_offset = -num_found
+        offset_text = ' '.join(parts)
+        offset_text = re.sub(r'^(?:на\s+|во?\s+)', '', offset_text).strip()
 
-    # 0. формат: дни недели (пн, след вт, ср через 2 недели, пт неделю назад)
-    if target_wd is not None:
-        now = datetime.datetime.now().date()
-        today_wd = now.weekday()
-        days_diff = target_wd - today_wd
-        if has_next:
-            days_diff += 7
-        if weeks_offset != 0:
-            days_diff += weeks_offset * 7
-        return now + datetime.timedelta(days=days_diff)
+        weeks_offset = None
+        if target_wd is not None:
+            if not offset_text or re.fullmatch(r'(?:этот|эта|эту|это)', offset_text) or re.fullmatch(r'(?:на\s+)?(?:эт|сей)\S*\s+недел\S*', offset_text):
+                weeks_offset = 0
+            elif re.fullmatch(r'след\.?|следующ\S*', offset_text) or re.fullmatch(r'(?:на\s+)?след\S*\s+недел\S*', offset_text):
+                weeks_offset = 1
+            else:
+                m_past = re.fullmatch(r'((?:поза[-\s]*)*)прошл\S*(?:\s+недел\S*)?', offset_text) or re.fullmatch(r'(?:на\s+)?((?:поза[-\s]*)*)прошл\S*\s+недел\S*', offset_text)
+                if m_past:
+                    weeks_offset = -(len(re.findall(r'поза', m_past.group(1))) + 1)
 
-    # 1. формат: 15 марта 2026
-    if len(parts) == 3 and parts[1] in _MONTHS and parts[0].isdigit() and parts[2].isdigit():
-        return datetime.date(int(parts[2]), _MONTHS[parts[1]], int(parts[0]))
+        if weeks_offset is not None:
+            return now + datetime.timedelta(days=target_wd - now.weekday() + 7 * weeks_offset)
 
-    # 2. формат: 15 марта
-    if len(parts) == 2 and parts[1] in _MONTHS and parts[0].isdigit():
-        day, month = int(parts[0]), _MONTHS[parts[1]]
-        return _resolve_year(day, month)
+        relative = re.fullmatch(r'(?:через (?P<future>.+)|(?P<past>.+) назад)', offset_text)
+        if relative:
+            amount = re.fullmatch(
+                r'(?:(.+?)\s+)?(неделю|недели|недель|нед\.?|день|дня|дней|сутки|суток)',
+                relative['future'] or relative['past'])
+            if not amount:
+                return None
+            number = _date_offset_number(amount[1])
+            if number is None:
+                return None
+            is_week = amount[2].startswith('нед')
+            if target_wd is not None and not is_week:
+                return None
+            days = number * (7 if is_week else 1) * (1 if relative['future'] else -1)
+            if target_wd is not None:
+                days += target_wd - now.weekday()
+            return now + datetime.timedelta(days=days)
 
-    # 3. форматы с точкой (15.03.2026 или 15.03)
-    if "." in text_lower:
-        dot_parts = [dp for dp in text_lower.split(".") if dp.isdigit()]
-        if len(dot_parts) == 3:
-            d, m_num, y = map(int, dot_parts)
-            if y < 100: y += 2000
-            return datetime.date(y, m_num, d)
-        elif len(dot_parts) == 2:
-            day, month = map(int, dot_parts)
-            return _resolve_year(day, month)
+        named = re.fullmatch(r'(\d{1,2}) ([а-я]+)(?: (\d{2}|\d{4})(?: г\.?(?:ода)?)?)?', text_lower)
+        if named and named[2].rstrip('.') in _MONTHS:
+            day, month = int(named[1]), _MONTHS[named[2].rstrip('.')]
+            if named[3]:
+                year = int(named[3])
+                return datetime.date(year + 2000 if year < 100 else year, month, day)
+            return _resolve_year(day, month, now)
 
+        iso = re.fullmatch(r'(\d{4})([-./])(\d{1,2})\2(\d{1,2})', text_lower)
+        if iso:
+            return datetime.date(int(iso[1]), int(iso[3]), int(iso[4]))
+
+        numeric = re.fullmatch(r'(\d{1,2})([./-])(\d{1,2})(?:\2(\d{2}|\d{4}))?', text_lower)
+        if numeric:
+            day, month = int(numeric[1]), int(numeric[3])
+            if numeric[4]:
+                year = int(numeric[4])
+                return datetime.date(year + 2000 if year < 100 else year, month, day)
+            return _resolve_year(day, month, now)
+    except (ValueError, OverflowError):
+        return None
     return None
 
 
@@ -418,7 +468,7 @@ def update_caches():
 def main_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("📅 моё расписание"))
-    kb.row(KeyboardButton("👩‍🎓 расписание преподавателя"), KeyboardButton("🚪 поиск аудитории"))
+    kb.row(KeyboardButton("👩‍🎓 расписание преподавателя"), KeyboardButton("🚪 расписание аудитории"))
     kb.row(KeyboardButton("📄 график пересдач"))
     kb.row(KeyboardButton("🔄 сменить группу"))
     return kb
@@ -427,6 +477,12 @@ def main_kb():
 def cancel_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("❌ отмена"))
+    return kb
+
+
+def inline_cancel_kb(callback_data="cancel_custom_date"):
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("❌ отмена", callback_data=callback_data))
     return kb
 
 
@@ -1249,8 +1305,49 @@ def generate_room_text(room, date):
 # --- обработчики бота ---
 
 def _check_cancel(m, text):
-    if m.text.lower() == "❌ отмена":
+    if (m.text or '').strip().lower() in ("❌ отмена", "отмена"):
         bot.send_message(m.chat.id, text, reply_markup=main_kb())
+        return True
+    return False
+
+
+def _send_group_date(m, date):
+    group = get_user_group(m.from_user.id)
+    if not group:
+        bot.send_message(m.chat.id, "❗ сначала напиши название своей группы", reply_markup=main_kb())
+        return
+    text, kb = get_schedule_view('d', group, date)
+    bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
+
+
+def _handle_pending_navigation(m, allow_date=True):
+    """Следующий шаг TeleBot перехватывает сообщения раньше обычных обработчиков."""
+    if is_updating:
+        bot_blocked(m)
+        return True
+    if not m.text:
+        bot.send_message(m.chat.id, "📝 отправь дату или выбери действие в меню", reply_markup=main_kb())
+        return True
+    text = m.text.strip().lower()
+    actions = {
+        '📅 моё расписание': my_sched,
+        '👩‍🎓 расписание преподавателя': teacher_search_start,
+        '🚪 расписание аудитории': room_search_start,
+        '🚪 поиск аудитории': room_search_start,  # Ранее отправленные клавиатуры.
+        '📄 график пересдач': search_retakes,
+        '🔄 сменить группу': change_grp,
+    }
+    commands = {'/start': start, '/delete': delete_cmd, '/info': admin_info,
+                '/update': admin_update, '/achtung': admin_broadcast}
+    action = actions.get(text) or commands.get(text.split()[0].split('@')[0] if text else '')
+    if action:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        action(m)
+        return True
+    date = parse_user_date(m.text) if allow_date else None
+    if date is not None:
+        bot.clear_step_handler_by_chat_id(m.chat.id)
+        _send_group_date(m, date)
         return True
     return False
 
@@ -1331,13 +1428,14 @@ def admin_update(m):
 
 @bot.message_handler(commands=['delete'])
 def delete_cmd(m):
+    bot.clear_step_handler_by_chat_id(m.chat.id)
     bot.send_message(m.chat.id,
                      "❗ перед удалением связки: ты всегда можешь ввести /start, чтобы начать работу с ботом снова")
     delete_user(m.from_user.id)
     bot.send_message(m.chat.id, "✅ данные успешно удалены")
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "📄 график пересдач")
+@bot.message_handler(func=lambda m: (m.text or '').lower() == "📄 график пересдач")
 def search_retakes(m):
     g = get_user_group(m.from_user.id)
     if not g:
@@ -1347,13 +1445,14 @@ def search_retakes(m):
     bot.send_message(m.chat.id, text, parse_mode='HTML')
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "👩‍🎓 расписание преподавателя")
+@bot.message_handler(func=lambda m: (m.text or '').lower() == "👩‍🎓 расписание преподавателя")
 def teacher_search_start(m):
     msg = bot.send_message(m.chat.id, "📝 введи фамилию преподавателя:", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, teacher_name_filter)
 
 
 def _entity_search_filter(m, view_type):
+    if _handle_pending_navigation(m): return
     if _check_cancel(m, "❌ поиск отменен"): return
     q = m.text.strip().lower()
     if view_type == 't':
@@ -1410,40 +1509,61 @@ def teacher_sel_callback(c):
     _entity_sel_callback(c, 't')
 
 
+@bot.callback_query_handler(func=lambda c: c.data == "cancel_custom_date")
+def cancel_custom_date_cb(c):
+    bot.answer_callback_query(c.id, "❌ поиск по дате отменен")
+    bot.clear_step_handler_by_chat_id(c.message.chat.id)
+    try:
+        bot.delete_message(c.message.chat.id, c.message.message_id)
+    except Exception:
+        try:
+            bot.edit_message_text("❌ поиск по дате отменен", c.message.chat.id, c.message.message_id)
+        except Exception:
+            pass
+
+
 @bot.callback_query_handler(func=lambda c: c.data.startswith('c|'))
 def custom_date_cb(c):
     bot.answer_callback_query(c.id)
+    bot.clear_step_handler_by_chat_id(c.message.chat.id)
     _, p, target = c.data.split('|')
     msg = bot.send_message(c.message.chat.id,
                            "📝 введи дату или день недели цифрами или словами:\n\n<i>('след вт', 'пт через 2 недели', 'ср неделю назад')</i>",
                            parse_mode='HTML',
-                           reply_markup=cancel_kb())
+                           reply_markup=inline_cancel_kb())
     bot.register_next_step_handler(msg, process_custom_date, p, target)
 
 
 def process_custom_date(m, p, target):
+    if _handle_pending_navigation(m, allow_date=False): return
     if _check_cancel(m, "❌ поиск по дате отменен"): return
 
     date = parse_user_date(m.text)
     if date:
-        bot.send_message(m.chat.id, "🔖 расписание на указанную дату:", reply_markup=main_kb())
         text, kb = get_schedule_view(p, target, date)
         bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
     else:
         msg = bot.send_message(m.chat.id,
                                "❌ неверный формат или дата.\n\nвведи дату заново либо нажми отмена.",
-                               reply_markup=cancel_kb())
+                               reply_markup=inline_cancel_kb())
         bot.register_next_step_handler(msg, process_custom_date, p, target)
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "🔄 сменить группу")
+
+@bot.message_handler(func=lambda m: (m.text or '').lower() == "🔄 сменить группу")
 def change_grp(m):
+    bot.clear_step_handler_by_chat_id(m.chat.id)
     msg = bot.send_message(m.chat.id, "📝 напиши название новой группы:", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, handle_group_input)
 
 
 def handle_group_input(m):
+    if _handle_pending_navigation(m): return
     if _check_cancel(m, "❌ отменено"): return
+    if not m.text:
+        bot.send_message(m.chat.id, "📝 напиши название группы:", reply_markup=cancel_kb())
+        bot.register_next_step_handler(m, handle_group_input)
+        return
     text = m.text.strip().lower()
     found = next((k for k in schedule_db if k.replace("-", "") == text.replace("-", "")), None)
     if found:
@@ -1455,7 +1575,7 @@ def handle_group_input(m):
         bot.send_message(m.chat.id, "😢 группа не найдена, попробуй еще раз через меню", reply_markup=main_kb())
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "📅 моё расписание")
+@bot.message_handler(func=lambda m: (m.text or '').lower() == "📅 моё расписание")
 def my_sched(m):
     g = get_user_group(m.from_user.id)
     if not g:
@@ -1478,13 +1598,19 @@ def nav_cb_handler(c):
 
 @bot.message_handler(commands=['start'])
 def start(m):
+    bot.clear_step_handler_by_chat_id(m.chat.id)
+    group_hint = ("чтобы сменить группу, нажми <b>«🔄 сменить группу»</b>."
+                  if get_user_group(m.from_user.id) else
+                  "просто <b>напиши название своей группы</b> (например: эби-124) и я тебя запомню!")
     msg = (f"привет! 👋\n\nэтот <b>неофициальный</b> бот показывает расписание для студентов ргу им. косыгина\n\n"
-           f"просто <b>напиши название своей группы</b> (например: эби-124) и я тебя запомню!\n\n\n\n"
+           f"{group_hint}\n\n"
+           f"дату можно написать прямо сообщением: <b>сегодня</b>, <b>пн через неделю</b>, "
+           f"<b>28.09.2026</b> — покажу расписание твоей группы.\n\n"
            f"<i>⚠️ внимание: бот сохраняет связку твоего id и выбранной группы. ты можешь удалить свои данные в любой момент с помощью команды /delete.</i>")
     bot.send_message(m.chat.id, msg, parse_mode='HTML', reply_markup=main_kb())
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "🚪 поиск аудитории")
+@bot.message_handler(func=lambda m: (m.text or '').lower() in ("🚪 расписание аудитории", "🚪 поиск аудитории"))
 def room_search_start(m):
     msg = bot.send_message(m.chat.id, "📝 введи номер аудитории:", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, process_room_search)
@@ -1501,7 +1627,18 @@ def room_sel_callback(c):
 
 @bot.message_handler(func=lambda m: True)
 def last_handle(m):
-    handle_group_input(m)
+    if not m.text:
+        bot.send_message(m.chat.id, "📝 напиши дату или выбери действие в меню", reply_markup=main_kb())
+        return
+    date = parse_user_date(m.text)
+    if date is not None:
+        _send_group_date(m, date)
+    elif not get_user_group(m.from_user.id):
+        handle_group_input(m)
+    elif not _check_cancel(m, "❌ отменено"):
+        bot.send_message(m.chat.id,
+                         "📝 напиши дату (например: сегодня, среда через пять недель, 28.09.2026).\n"
+                         "чтобы сменить группу, нажми «🔄 сменить группу».", reply_markup=main_kb())
 
 
 # --- запуск ---
