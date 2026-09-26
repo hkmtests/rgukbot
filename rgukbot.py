@@ -1494,6 +1494,7 @@ def last_handle(m):
 
 # --- запуск ---
 if __name__ == '__main__':
+    log_to_admin("⏳ бот готовится к запуску…")
     init_db()
     load_from_local()
 
