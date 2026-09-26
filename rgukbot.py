@@ -904,6 +904,7 @@ def load_from_local():
     global schedule_db, group_to_file, is_updating
     is_updating = True
     try:
+        log_to_admin("⏳ начинаю обработку локальной базы расписаний…")
         temp_db, temp_mapping, errors = _load_schedules_from_dir(SCHEDULES_DIR)
         if not temp_db:
             if not any(os.path.exists(path) for path in (SCHEDULES_DIR, RETAKES_DIR)):
@@ -1022,6 +1023,7 @@ def download_schedules():
             )
             return False
 
+        log_to_admin("⏳ начинаю обработку скачанной базы расписаний…")
         temp_db, temp_mapping, errors = _load_schedules_from_dir(staged_schedules)
         if not temp_db:
             log_to_admin(
@@ -1070,10 +1072,20 @@ def download_schedules():
         is_updating = False
 
 
-def midnight_updater():
+def scheduled_updater():
+    """Обновляет базу в 06:00, 14:00 и 21:00 по Москве (UTC+3)."""
+    moscow_tz = datetime.timezone(datetime.timedelta(hours=3))
+    update_hours = (6, 14, 21)
     while True:
-        now = datetime.datetime.now()
-        target = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(0, 0, 5))
+        now = datetime.datetime.now(moscow_tz)
+        targets = [
+            datetime.datetime.combine(now.date(), datetime.time(hour), tzinfo=moscow_tz)
+            for hour in update_hours
+        ]
+        target = next(
+            (target for target in targets if target > now),
+            targets[0] + datetime.timedelta(days=1),
+        )
         time.sleep((target - now).total_seconds())
         download_schedules()
 
@@ -1498,7 +1510,7 @@ if __name__ == '__main__':
     init_db()
     load_from_local()
 
-    Thread(target=midnight_updater, daemon=True).start()
+    Thread(target=scheduled_updater, daemon=True).start()
 
     print("бот запущен и готов к работе!")
     while True:
