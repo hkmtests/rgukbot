@@ -1,8 +1,6 @@
 pyTelegramBotAPI
 pandas
 openpyxl
-flask
-gunicorn
 requests
 urllib3
 python-dotenv
