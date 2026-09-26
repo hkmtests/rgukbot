@@ -7,14 +7,16 @@ import requests
 import urllib3
 import sqlite3
 import os
-import shutil
 import glob
+import shutil
+import tempfile
+import html
 from threading import Thread
+from functools import wraps
 from bs4 import BeautifulSoup
 import urllib.parse
 import docx
 import re
-import hashlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,14 +28,14 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
-#если нужно чтобы бот не срал в логи можно добавить в ENV LOG_CHAT_ID чтобы например он срал в канал
+# Для системных сообщений можно указать отдельный канал в ENV.
 LOG_CHAT_ID = int(os.getenv('LOG_CHAT_ID')) if os.getenv('LOG_CHAT_ID') else ADMIN_ID
 SCHEDULE_PAGE_URL = "https://rguk.ru/students/schedule/"
 SCHEDULES_DIR = 'schedules_folder'
 RETAKES_DIR = 'retakes_folder'
 DB_PATH = 'users_vuz.db'
 
-# --- базы данных/кеши ---
+# Базы данных в памяти и кэши
 schedule_db = {}
 retake_db = {}
 group_to_file = {}
@@ -43,7 +45,7 @@ global_update_time_sch = ""
 global_update_time_ret = ""
 is_updating = False
 
-# --- константы ---
+# Константы
 DAY_NAMES = {0: 'понедельник', 1: 'вторник', 2: 'среда', 3: 'четверг', 4: 'пятница', 5: 'суббота', 6: 'воскресенье'}
 DAY_SHORTS = {0: 'ПН', 1: 'ВТ', 2: 'СР', 3: 'ЧТ', 4: 'ПТ', 5: 'СБ'}
 
@@ -52,6 +54,26 @@ TYPE_EXPAND = {
     'лаб': 'лабораторная', 'сем': 'семинар', 'конс': 'консультация',
     'экз': 'экзамен', 'зач': 'зачёт',
 }
+
+_MONTHS = {
+    "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
+    "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12
+}
+
+_DAYS_OF_WEEK = {
+    "пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2, "среду": 2,
+    "чт": 3, "четверг": 3, "пт": 4, "пятница": 4, "пятницу": 4, "сб": 5, "суббота": 5,
+    "субботу": 5, "вс": 6, "воскресенье": 6
+}
+
+_WORD_TO_NUM = {
+    "одну": 1, "одной": 1, "одна": 1, "один": 1, "две": 2, "два": 2, "двух": 2,
+    "три": 3, "трёх": 3, "трех": 3, "четыре": 4, "четырёх": 4, "четырех": 4,
+    "пять": 5, "пяти": 5, "шесть": 6, "шести": 6, "семь": 7, "семи": 7,
+    "восемь": 8, "восьми": 8, "девять": 9, "девяти": 9, "десять": 10, "десяти": 10,
+}
+
+_REJECTED_TEACHERS = ("преподаватель кафедры", "препод. кафедры")
 
 LESSON_SLOTS = [
     ("1️⃣", "09:15", "10:45"),
@@ -70,8 +92,8 @@ def log_to_admin(text):
     print(text, flush=True)
     try:
         bot.send_message(LOG_CHAT_ID, f"<code>[system]</code> {text}", parse_mode='HTML')
-    except Exception as e:
-        print(f"ошибка отправки лога в Telegram: {e}", flush=True)
+    except Exception as error:
+        print(f"ошибка отправки лога в Telegram: {error}", flush=True)
 
 
 def get_target_date():
@@ -102,7 +124,12 @@ def get_update_time(group_key):
     return ""
 
 
-def get_lesson_number(time_str):
+def get_lesson_number(time_str, source_number=None):
+    source = re.fullmatch(r"([1-9]\d*)(?:\.0)?", str(source_number).strip())
+    if source:
+        number = int(source[1])
+        label = f"{number}️⃣" if number < 10 else ("🔟" if number == 10 else str(number))
+        return f"{label} пара"
     t = str(time_str).replace(' ', '').replace('.', ':')
     m = {
         "09:15": "1️⃣", "09:10": "1️⃣", "10:50": "2️⃣", "12:25": "3️⃣", "12:50": "3️⃣",
@@ -115,7 +142,7 @@ def get_lesson_number(time_str):
 
 
 def get_week_type(date):
-    # логика расчета четной/нечетной недели
+    # Учебный год начинается в сентябре (для дат до августа считаем прошлый год)
     start_year = date.year if date.month >= 8 else date.year - 1
     ref = datetime.date(start_year, 9, 1)
     diff = (date - datetime.timedelta(days=date.weekday()) - (ref - datetime.timedelta(days=ref.weekday()))).days // 7
@@ -123,8 +150,12 @@ def get_week_type(date):
 
 
 def extract_row_lesson(row, wt):
-    """извлекает и нормализует данные о паре из строки таблицы расписания."""
-    if wt == "нечетная":
+    """Извлекает и нормализует данные о паре из строки таблицы расписания."""
+    if row.index[0] == 'Дата':
+        sub, tea, room, tp = (
+            row['Дисциплина'], row['Преподаватель'], row['Аудитория'], row['Тип']
+        )
+    elif wt == "нечетная":
         sub, tea, room, tp = row.iloc[6], row.iloc[5], row.iloc[3], row.iloc[4]
     else:
         sub, tea, tp, room = row.iloc[7], row.iloc[8], row.iloc[9], row.iloc[10]
@@ -141,8 +172,52 @@ def extract_row_lesson(row, wt):
     }
 
 
-def merge_lesson_halves(lessons, match_keys=('sub', 'room')):
-    """объединяет половинки пар"""
+def _rows_for_date(df, date):
+    """Выбирает занятия на календарную дату или на день недельного расписания."""
+    if df.columns[0] == 'Дата':
+        return df[df['Дата'] == date]
+    return df[df.iloc[:, 0] == DAY_SHORTS.get(date.weekday())]
+
+
+def _lesson_rows(day_df):
+    """Определяет половинки до фильтрации по предмету, преподавателю или аудитории."""
+    entries, slots = [], {}
+    for (_, row), number in zip(day_df.iterrows(), day_df.iloc[:, 1].ffill()):
+        tm = str(row.iloc[2]).strip()
+        num = get_lesson_number(tm, number)
+        match = re.fullmatch(r"(\d{1,2})[:.](\d{2})\s*[-–—]\s*(\d{1,2})[:.](\d{2})", tm)
+        span = None
+        if match:
+            h1, m1, h2, m2 = map(int, match.groups())
+            if h1 < 24 and h2 < 24 and m1 < 60 and m2 < 60:
+                span = (h1 * 60 + m1, h2 * 60 + m2)
+                slots.setdefault(num, set()).add(span)
+        entries.append((row, num, span))
+
+    for row, num, span in entries:
+        half = None
+        if span and span[1] - span[0] in (40, 45) and not num.startswith("🔹"):
+            ranges = sorted(slots[num])
+            if (len(ranges) == 2 and ranges[0][1] == ranges[1][0]
+                    and ranges[0][1] - ranges[0][0] == ranges[1][1] - ranges[1][0]):
+                half = ranges.index(span) + 1
+            else:
+                # В календарных таблицах пустая половинка может отсутствовать.
+                start, end = span
+                for candidate, index in ((start, 1), (start - (end - start), 2)):
+                    if get_lesson_number(f"{candidate // 60:02}:{candidate % 60:02}") == num:
+                        half = index
+                        break
+        yield row, {'num': num, 'half': half}
+
+
+def _lesson_heading(num, half=None):
+    title = num.removeprefix("🔹 ")
+    return f"{title} · {half}-я половина" if half else title
+
+
+def merge_lesson_halves(lessons, match_keys=()):
+    """Объединяет смежные половинки с одинаковыми данными занятия и дополнительными match_keys."""
     merged = []
     can_m = True
     for c in lessons:
@@ -151,11 +226,17 @@ def merge_lesson_halves(lessons, match_keys=('sub', 'room')):
             merged.append(item)
             continue
         p = merged[-1]
-        is_match = all(p.get(k) == item.get(k) for k in match_keys)
-        if is_match and not p['num'].startswith("🔹") and item['num'].startswith("🔹") and can_m:
-            t1 = p['time'].split('-')[0] if '-' in p['time'] else p['time']
-            t2 = item['time'].split('-')[1] if '-' in item['time'] else item['time']
+        is_match = all(p.get(k) == item.get(k) for k in ('sub', 'room', 'tea', 'type', 'date', *match_keys))
+        t1, _, end = p['time'].partition('-')
+        start, _, t2 = item['time'].partition('-')
+        adjacent = bool(end and t2) and end.strip() == start.strip()
+        if 'half' in p or 'half' in item:
+            halves = p.get('half') == 1 and item.get('half') == 2 and p['num'] == item['num']
+        else:
+            halves = not p['num'].startswith("🔹") and item['num'].startswith("🔹")
+        if is_match and adjacent and halves and can_m:
             p['time'] = f"{t1}-{t2}"
+            if 'half' in p: p['half'] = None
             can_m = False
         else:
             merged.append(item)
@@ -163,65 +244,35 @@ def merge_lesson_halves(lessons, match_keys=('sub', 'room')):
     return merged
 
 
-def format_lesson(l, header_line, show_tea=True, show_room=True):
-    res = f"{header_line}\n📚 <b>{l['sub']}</b>\n"
-    if l.get('type'):
-        res += f"  📝 {TYPE_EXPAND.get(l['type'].lower(), l['type'])}\n"
-    if show_tea and l.get('tea'):
-        res += f"  👨‍🏫 {l['tea']}\n"
-    if show_room and l.get('room'):
-        res += f"  🚪 {l['room']}\n"
+def _format_lesson_body(sub, type_str="", tea="", room=""):
+    """Форматирует тело карточки занятия без заголовка."""
+    res = f"📚 <b>{sub}</b>\n"
+    if type_str: res += f"  📝 {TYPE_EXPAND.get(type_str.lower(), type_str)}\n"
+    if tea: res += f"  👨‍🏫 {tea}\n"
+    if room: res += f"  🚪 {room}\n"
     return res + "\n"
 
 
+def _resolve_year(day, month):
+    now = datetime.datetime.now().date()
+    target = datetime.date(now.year, month, day)
+    return datetime.date(now.year - 1, month, day) if (target - now).days > 180 else target
+
+
 def parse_user_date(text: str) -> datetime.date | None:
+    """Распознает дату из строки: дни недели, относительные смещения, словесные и числовые даты."""
     if not text:
         return None
     text_lower = text.strip().lower()
-
-    # -1. относительные дни: сегодня, завтра, послезавтра, вчера, позавчера, позапозавчера...
-    today = datetime.datetime.now().date()
-    if text_lower == "сегодня":
-        return today
-    if text_lower == "завтра":
-        return today + datetime.timedelta(days=1)
-    if text_lower == "вчера":
-        return today - datetime.timedelta(days=1)
-    if "послезавтра" in text_lower:
-        prefix = text_lower.split("послезавтра")[0]
-        extra = prefix.count("после")
-        return today + datetime.timedelta(days=2 + extra)
-    if "позавчера" in text_lower:
-        prefix = text_lower.split("позавчера")[0]
-        extra = prefix.count("поза")
-        return today - datetime.timedelta(days=2 + extra)
-
-    months = {
-        "января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
-        "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12
-    }
-
-    days_of_week = {
-        "пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2, "среду": 2,
-        "чт": 3, "четверг": 3, "пт": 4, "пятница": 4, "пятницу": 4, "сб": 5, "суббота": 5,
-        "субботу": 5, "вс": 6, "воскресенье": 6
-    }
 
     parts = text_lower.split()
     target_wd = None
     has_next = False
     weeks_offset = 0
 
-    word_to_num = {
-        "одну": 1, "одной": 1, "одна": 1, "один": 1, "две": 2, "два": 2, "двух": 2,
-        "три": 3, "трёх": 3, "трех": 3, "четыре": 4, "четырёх": 4, "четырех": 4,
-        "пять": 5, "пяти": 5, "шесть": 6, "шести": 6, "семь": 7, "семи": 7,
-        "восемь": 8, "восьми": 8, "девять": 9, "девяти": 9, "десять": 10, "десяти": 10,
-    }
-
     for word in parts:
-        if word in days_of_week:
-            target_wd = days_of_week[word]
+        if word in _DAYS_OF_WEEK:
+            target_wd = _DAYS_OF_WEEK[word]
 
     for word in parts:
         if word in ["след", "след.", "следующий", "следующая", "следующую"]:
@@ -237,8 +288,8 @@ def parse_user_date(text: str) -> datetime.date | None:
                 if parts[j].isdigit():
                     weeks_offset = int(parts[j])
                     break
-                elif parts[j] in word_to_num:
-                    weeks_offset = word_to_num[parts[j]]
+                elif parts[j] in _WORD_TO_NUM:
+                    weeks_offset = _WORD_TO_NUM[parts[j]]
                     break
                 elif parts[j] in ("неделю", "нед", "нед."):
                     weeks_offset = 1
@@ -249,8 +300,8 @@ def parse_user_date(text: str) -> datetime.date | None:
                 if parts[j].isdigit():
                     num_found = int(parts[j])
                     break
-                elif parts[j] in word_to_num:
-                    num_found = word_to_num[parts[j]]
+                elif parts[j] in _WORD_TO_NUM:
+                    num_found = _WORD_TO_NUM[parts[j]]
                     break
                 elif parts[j] in ("неделю", "нед", "нед.", "недель", "недели"):
                     if j > 0:
@@ -274,17 +325,13 @@ def parse_user_date(text: str) -> datetime.date | None:
         return now + datetime.timedelta(days=days_diff)
 
     # 1. формат: 15 марта 2026
-    if len(parts) == 3 and parts[1] in months and parts[0].isdigit() and parts[2].isdigit():
-        return datetime.date(int(parts[2]), months[parts[1]], int(parts[0]))
+    if len(parts) == 3 and parts[1] in _MONTHS and parts[0].isdigit() and parts[2].isdigit():
+        return datetime.date(int(parts[2]), _MONTHS[parts[1]], int(parts[0]))
 
     # 2. формат: 15 марта
-    if len(parts) == 2 and parts[1] in months and parts[0].isdigit():
-        day, month = int(parts[0]), months[parts[1]]
-        now = datetime.datetime.now().date()
-        target_date = datetime.date(now.year, month, day)
-        if (target_date - now).days > 180:
-            target_date = datetime.date(now.year - 1, month, day)
-        return target_date
+    if len(parts) == 2 and parts[1] in _MONTHS and parts[0].isdigit():
+        day, month = int(parts[0]), _MONTHS[parts[1]]
+        return _resolve_year(day, month)
 
     # 3. форматы с точкой (15.03.2026 или 15.03)
     if "." in text_lower:
@@ -295,51 +342,54 @@ def parse_user_date(text: str) -> datetime.date | None:
             return datetime.date(y, m_num, d)
         elif len(dot_parts) == 2:
             day, month = map(int, dot_parts)
-            now = datetime.datetime.now().date()
-            target_date = datetime.date(now.year, month, day)
-            if (target_date - now).days > 180:
-                target_date = datetime.date(now.year - 1, month, day)
-            return target_date
+            return _resolve_year(day, month)
 
     return None
 
 
 def get_schedule_view(target_type, target, date):
-    """единый диспетчер для формирования текста расписания и клавиатуры навигации."""
+    """Единый диспетчер для формирования текста расписания и клавиатуры навигации."""
     prefix = get_warnings(date)
-    generators = {'r': generate_room_text, 't': generate_teacher_text}
-    text = prefix + generators.get(target_type, generate_text)(target, date)
-    kb = nav_kb(target, date, target_type)
+    if target_type == 'r':
+        text = prefix + generate_room_text(target, date)
+    elif target_type == 't':
+        text = prefix + generate_teacher_text(target, date)
+    else:
+        target_type = 'd'
+        text = prefix + generate_text(target, date)
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        InlineKeyboardButton("⬅️", callback_data=f"{target_type}|{target}|{date - datetime.timedelta(days=1)}"),
+        InlineKeyboardButton("📅", callback_data=f"c|{target_type}|{target}"),
+        InlineKeyboardButton("➡️", callback_data=f"{target_type}|{target}|{date + datetime.timedelta(days=1)}")
+    )
     return text, kb
 
 
-def _latest_update_str(pattern):
-    """возвращает строку с временем последнего обновления файлов по паттерну."""
-    files = glob.glob(pattern)
-    if files:
-        latest = max(os.path.getmtime(f) for f in files)
-        return f"🕒 база обновлена: {datetime.datetime.fromtimestamp(latest).strftime('%d.%m %H:%M')}"
-    return ""
-
-
 def update_caches():
-    """обновляет кэш аудиторий, преподавателей и времени обновления файлов."""
+    """Обновляет кэш аудиторий, преподавателей и времени обновления файлов."""
     global all_rooms_cache, all_teachers_cache, global_update_time_sch, global_update_time_ret
     rooms = set()
     teachers = set()
     for df in schedule_db.values():
-        for col_idx in [3, 10]:
+        if df.columns[0] == 'Дата':
+            room_columns = [df['Аудитория']]
+            teacher_columns = [df['Преподаватель']]
+        else:
+            room_columns = [df.iloc[:, index] for index in (3, 10) if index < len(df.columns)]
+            teacher_columns = [df.iloc[:, index] for index in (5, 8) if index < len(df.columns)]
+        for values in room_columns:
             try:
-                for val in df.iloc[:, col_idx].dropna().unique():
+                for val in values.dropna().unique():
                     r = str(val).strip()
                     if r.endswith('.0'): r = r[:-2]
                     if r and r.lower() != 'nan':
                         rooms.add(r)
             except Exception:
                 continue
-        for col_idx in [5, 8]:
+        for values in teacher_columns:
             try:
-                for n in df.iloc[:, col_idx].dropna().unique():
+                for n in values.dropna().unique():
                     t = str(n).strip()
                     if t and t.lower() != 'nan':
                         teachers.add(t)
@@ -347,94 +397,20 @@ def update_caches():
                 continue
     all_rooms_cache = sorted(rooms)
     all_teachers_cache = sorted(teachers)
-    global_update_time_sch = _latest_update_str(os.path.join(SCHEDULES_DIR, "*.xlsx"))
-    global_update_time_ret = _latest_update_str(os.path.join(RETAKES_DIR, "*"))
 
+    sch_files = glob.glob(os.path.join(SCHEDULES_DIR, "*.xlsx"))
+    if sch_files:
+        latest = max(os.path.getmtime(f) for f in sch_files)
+        global_update_time_sch = f"🕒 база обновлена: {datetime.datetime.fromtimestamp(latest).strftime('%d.%m %H:%M')}"
+    else:
+        global_update_time_sch = ""
 
-# --- система отслеживания изменений расписания ---
-
-def snapshot_schedules(groups):
-    """создаёт хеш-снимок расписания для указанных групп для последующего сравнения."""
-    snapshot = {}
-    for g in groups:
-        df = schedule_db.get(g)
-        if df is not None:
-            try:
-                snapshot[g] = hashlib.md5(df.to_csv(index=False).encode()).hexdigest()
-            except Exception:
-                snapshot[g] = None
-        else:
-            snapshot[g] = None
-    return snapshot
-
-
-def notify_schedule_changes(old_snapshot, new_snapshot, group_users):
-    """сравнивает снимки расписания и отправляет уведомления пользователям изменённых групп.
-
-    запускается в отдельном потоке после успешного обновления базы.
-    уведомляет только если для группы БЫЛО расписание и оно ИЗМЕНИЛОСЬ
-    (чтобы не спамить при первом запуске).
-    также уведомляет если группа исчезла из расписания (выпуск/расформирование).
-    """
-    changed_groups = []
-    removed_groups = []
-    for group in new_snapshot:
-        old_hash = old_snapshot.get(group)
-        new_hash = new_snapshot.get(group)
-        if old_hash is not None and new_hash is not None and old_hash != new_hash:
-            changed_groups.append(group)
-        elif old_hash is not None and new_hash is None:
-            # группа была, но исчезла из нового расписания
-            removed_groups.append(group)
-
-    if not changed_groups and not removed_groups:
-        log_to_admin("📊 расписание не изменилось, уведомления не нужны")
-        return
-
-    notified = 0
-    failed = 0
-
-    # уведомления об изменениях
-    if changed_groups:
-        log_to_admin(f"📢 изменения в расписании для {len(changed_groups)} групп: {', '.join(changed_groups)}")
-        for group in changed_groups:
-            users = group_users.get(group, [])
-            for user_id in users:
-                try:
-                    bot.send_message(
-                        user_id,
-                        f"📢 <b>расписание обновлено!</b>\n\n"
-                        f"расписание для группы <b>{group}</b> изменилось.\n"
-                        f"нажми «📅 моё расписание» чтобы проверить.",
-                        parse_mode='HTML',
-                        reply_markup=main_kb()
-                    )
-                    notified += 1
-                    time.sleep(0.05)
-                except Exception:
-                    failed += 1
-
-    # уведомления об исчезнувших группах
-    if removed_groups:
-        log_to_admin(f"⚠️ группы исчезли из расписания: {', '.join(removed_groups)}")
-        for group in removed_groups:
-            users = group_users.get(group, [])
-            for user_id in users:
-                try:
-                    bot.send_message(
-                        user_id,
-                        f"⚠️ <b>группа {group} больше не найдена в расписании.</b>\n\n"
-                        f"возможно, группа была расформирована или переименована.\n"
-                        f"нажми «🔄 сменить группу» чтобы выбрать новую.",
-                        parse_mode='HTML',
-                        reply_markup=main_kb()
-                    )
-                    notified += 1
-                    time.sleep(0.05)
-                except Exception:
-                    failed += 1
-
-    log_to_admin(f"📢 уведомления отправлены: {notified} успешно, {failed} не доставлено")
+    ret_files = glob.glob(os.path.join(RETAKES_DIR, "*"))
+    if ret_files:
+        latest = max(os.path.getmtime(f) for f in ret_files)
+        global_update_time_ret = f"🕒 база обновлена: {datetime.datetime.fromtimestamp(latest).strftime('%d.%m %H:%M')}"
+    else:
+        global_update_time_ret = ""
 
 
 # --- клавиатуры ---
@@ -442,7 +418,7 @@ def notify_schedule_changes(old_snapshot, new_snapshot, group_users):
 def main_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("📅 моё расписание"))
-    kb.row(KeyboardButton("👩‍🎓 расписание преподавателя"), KeyboardButton("🚪 расписание аудитории"))
+    kb.row(KeyboardButton("👩‍🎓 расписание преподавателя"), KeyboardButton("🚪 поиск аудитории"))
     kb.row(KeyboardButton("📄 график пересдач"))
     kb.row(KeyboardButton("🔄 сменить группу"))
     return kb
@@ -451,16 +427,6 @@ def main_kb():
 def cancel_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("❌ отмена"))
-    return kb
-
-
-def nav_kb(target, date, prefix="d"):
-    kb = InlineKeyboardMarkup()
-    kb.row(
-        InlineKeyboardButton("⬅️", callback_data=f"{prefix}|{target}|{date - datetime.timedelta(days=1)}"),
-        InlineKeyboardButton("📅", callback_data=f"c|{prefix}|{target}"),
-        InlineKeyboardButton("➡️", callback_data=f"{prefix}|{target}|{date + datetime.timedelta(days=1)}")
-    )
     return kb
 
 
@@ -500,43 +466,32 @@ def get_all_schedule_links():
 
 # --- работа с бд ---
 
-def init_db():
+def _db(sql, params=(), fetch=None):
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS users (
-                            user_id INTEGER PRIMARY KEY,
-                            group_name TEXT
-                        )""")
+        cur = conn.execute(sql, params)
+        if fetch == "one": return cur.fetchone()
+        if fetch == "all": return cur.fetchall()
+
+
+def init_db():
+    _db("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, group_name TEXT)")
 
 
 def set_user_group(user_id, group_name):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("REPLACE INTO users (user_id, group_name) VALUES (?, ?)", (user_id, group_name.lower()))
+    _db("REPLACE INTO users (user_id, group_name) VALUES (?, ?)", (user_id, group_name.lower()))
 
 
 def get_user_group(user_id):
-    with sqlite3.connect(DB_PATH) as conn:
-        res = conn.execute("SELECT group_name FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        return res[0] if res else None
+    res = _db("SELECT group_name FROM users WHERE user_id = ?", (user_id,), fetch="one")
+    return res[0] if res else None
 
 
 def get_all_users():
-    with sqlite3.connect(DB_PATH) as conn:
-        return [r[0] for r in conn.execute("SELECT user_id FROM users").fetchall()]
+    return [r[0] for r in _db("SELECT user_id FROM users", fetch="all")]
 
 
 def delete_user(user_id):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-
-
-def get_users_by_group():
-    """возвращает словарь {group_name: [user_id, ...]} для всех пользователей с группой."""
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("SELECT user_id, group_name FROM users WHERE group_name IS NOT NULL").fetchall()
-    result = {}
-    for user_id, group_name in rows:
-        result.setdefault(group_name, []).append(user_id)
-    return result
+    _db("DELETE FROM users WHERE user_id = ?", (user_id,))
 
 
 # --- парсинг данных ---
@@ -587,7 +542,9 @@ def process_retake_df(df):
             if entry[k].lower() == 'nan': entry[k] = ''
 
         for g in groups:
-            retake_db.setdefault(g, []).append(entry)
+            if g not in retake_db:
+                retake_db[g] = []
+            retake_db[g].append(entry)
 
 
 def load_retakes_from_local():
@@ -628,158 +585,497 @@ def load_retakes_from_local():
             pass
 
 
-def load_from_local():
-    global schedule_db, group_to_file, is_updating
-    is_updating = True
+_DATED_HEADER_ALIASES = {
+    'Дата': ('дата', 'дата занятия', 'дата занятий'),
+    '№ пары': ('№ пары', 'номер пары', '№ занятия', 'номер занятия'),
+    'Время': ('время', 'время занятия', 'время проведения'),
+    'Дисциплина': ('дисциплина', 'наименование дисциплины', 'предмет'),
+    'Преподаватель': ('преподаватель', 'фио преподавателя', 'ф и о преподавателя'),
+    'Аудитория': ('ауд', 'аудитория', 'кабинет'),
+    'Тип': ('вид уч занятий', 'вид учебных занятий', 'вид занятия',
+            'тип учебных занятий', 'тип занятия', 'тип'),
+    'Адрес': ('адрес проведения', 'адрес', 'место проведения'),
+}
+
+
+def _normalized_schedule_header(value):
+    if pd.isna(value):
+        return ''
+    name = str(value).casefold().replace('ё', 'е')
+    return re.sub(r'\s+', ' ', re.sub(r'[.,:;]+', ' ', name)).strip()
+
+
+def _dated_column_map(headers):
+    """Определяет назначение столбцов по заголовкам, независимо от их порядка."""
+    source_names = {_normalized_schedule_header(value): value for value in headers}
+    mapping = {}
+    for field, aliases in _DATED_HEADER_ALIASES.items():
+        for alias in aliases:
+            original = source_names.get(alias)
+            if original is not None:
+                mapping[field] = original
+                break
+    return mapping
+
+
+def _dated_schedule_header(df_raw):
+    """Находит заголовок календарного листа после неудачи недельного поиска."""
+    required = {'Дата', '№ пары', 'Время'}
+    for index, row in df_raw.iterrows():
+        if required.issubset(_dated_column_map(row).keys()):
+            return index
+    return None
+
+
+def _dated_schedule_date(value):
+    if isinstance(value, (datetime.date, datetime.datetime, pd.Timestamp)) and not pd.isna(value):
+        return value.date() if isinstance(value, (datetime.datetime, pd.Timestamp)) else value
+    if isinstance(value, str):
+        text = value.strip()
+        for pattern, date_format in (
+            (r'\d{1,2}\.\d{1,2}\.\d{4}', '%d.%m.%Y'),
+            (r'\d{1,2}/\d{1,2}/\d{4}', '%d/%m/%Y'),
+            (r'\d{4}-\d{1,2}-\d{1,2}', '%Y-%m-%d'),
+        ):
+            if re.fullmatch(pattern, text):
+                try:
+                    return datetime.datetime.strptime(text, date_format).date()
+                except ValueError:
+                    return None
+    return None
+
+
+def _read_dated_schedule(xls, sheet, header_index):
+    """Приводит разные порядки колонок расписаний по датам к общему виду."""
+    source = pd.read_excel(xls, sheet_name=sheet, header=header_index)
+    columns = _dated_column_map(source.columns)
+    required = ('Дата', '№ пары', 'Время', 'Дисциплина', 'Преподаватель', 'Аудитория', 'Тип')
+    missing = [field for field in required if field not in columns]
+    if missing:
+        raise ValueError('в расписании по датам не найдены колонки: ' + ', '.join(missing))
+
+    lessons = []
+    current_date = None
+    for _, row in source.iterrows():
+        date_value = row[columns['Дата']]
+        if pd.notna(date_value):
+            current_date = _dated_schedule_date(date_value)
+        subject = row[columns['Дисциплина']]
+        if current_date is None or pd.isna(subject) or not str(subject).strip():
+            continue
+        lesson_time = row[columns['Время']]
+        if pd.isna(lesson_time) or not re.match(r'^\s*\d{1,2}[:.]\d{2}\s*[-–]\s*\d{1,2}[:.]\d{2}', str(lesson_time)):
+            continue
+        lessons.append({
+            'Дата': current_date,
+            '№ пары': row[columns['№ пары']],
+            'Время': str(lesson_time).strip(),
+            'Дисциплина': subject,
+            'Преподаватель': row[columns['Преподаватель']],
+            'Аудитория': row[columns['Аудитория']],
+            'Тип': row[columns['Тип']],
+            'Адрес': row[columns['Адрес']] if 'Адрес' in columns else None,
+        })
+
+    if not lessons:
+        raise ValueError('в расписании по датам не найдено занятий с корректной датой и временем')
+
+    return pd.DataFrame(
+        lessons,
+        columns=['Дата', '№ пары', 'Время', 'Дисциплина', 'Преподаватель', 'Аудитория', 'Тип', 'Адрес'],
+    )
+
+
+def _load_schedules_from_dir(directory):
+    """Читает XLSX из каталога и возвращает базу вместе с ошибками чтения.
+
+    Ошибка одного файла или листа не прерывает обработку остальных. Эта
+    функция не отправляет сообщения сама: вызывающий код формирует один
+    итоговый отчёт после завершения обновления.
+    """
     temp_db, temp_mapping = {}, {}
-    files = glob.glob(os.path.join(SCHEDULES_DIR, "*.xlsx"))
+    errors = []
+    files = sorted(glob.glob(os.path.join(directory, "*.xlsx")))
 
     if not files:
-        is_updating = False
-        return False
+        return temp_db, temp_mapping, ["не найдено ни одного файла расписания"]
 
-    log_to_admin(f"📂 загрузка данных из {len(files)} файлов")
     for filepath in files:
+        recognized_sheets = 0
         try:
             xls = pd.ExcelFile(filepath, engine='openpyxl')
+        except Exception as error:
+            errors.append(
+                f"не удалось открыть файл {os.path.basename(filepath)}: {error}"
+            )
+            continue
+
+        try:
+            errors_before_file = len(errors)
             for sheet in xls.sheet_names:
                 try:
                     df_raw = pd.read_excel(xls, sheet_name=sheet, header=None)
-                    mask = df_raw.apply(lambda r: r.astype(str).str.contains('день недели', case=False, na=False).any(), axis=1)
-                    if not mask.any(): continue
-                    h_idx = df_raw[mask].index[0]
-                    df = pd.read_excel(xls, sheet_name=sheet, header=h_idx)
-                    df = df.dropna(how='all', axis=1)
-                    d_col = df.columns[0]
-                    df[d_col] = df[d_col].astype(str).str.strip().str.upper()
-                    df.loc[~df[d_col].isin(['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']), d_col] = None
-                    df[d_col] = df[d_col].ffill()
+                    mask = df_raw.apply(
+                        lambda row: row.astype(str).str.contains('день недели', case=False, na=False).any(),
+                        axis=1,
+                    )
+                    if not mask.any():
+                        dated_header = _dated_schedule_header(df_raw)
+                        if dated_header is None:
+                            errors.append(
+                                f"лист «{sheet}» в файле {os.path.basename(filepath)} "
+                                "пропущен: не найдена строка заголовков с колонкой «День недели»"
+                            )
+                            continue
+                        df = _read_dated_schedule(xls, sheet, dated_header)
+                    else:
+                        header_index = df_raw[mask].index[0]
+                        df = pd.read_excel(xls, sheet_name=sheet, header=header_index)
+                        df = df.dropna(how='all', axis=1)
+                        day_column = df.columns[0]
+                        df[day_column] = df[day_column].astype(str).str.strip().str.upper()
+                        df.loc[~df[day_column].isin(['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ']), day_column] = None
+                        df[day_column] = df[day_column].ffill()
                     group_key = sheet.strip().lower()
                     temp_db[group_key], temp_mapping[group_key] = df, filepath
-                except Exception:
-                    continue
-        except Exception:
+                    recognized_sheets += 1
+                except Exception as error:
+                    errors.append(
+                        f"лист «{sheet}» в файле {os.path.basename(filepath)} "
+                        f"пропущен: {error}"
+                    )
+
+            if not recognized_sheets and len(errors) == errors_before_file:
+                errors.append(
+                    f"в файле {os.path.basename(filepath)} не распознано ни одного листа расписания"
+                )
+        finally:
+            xls.close()
+
+    return temp_db, temp_mapping, errors
+
+
+def _unique_errors(errors):
+    return list(dict.fromkeys(errors))
+
+
+def _format_schedule_update_report(
+    group_count,
+    errors,
+    downloaded_schedules=None,
+    downloaded_retakes=None,
+    preserved_groups=0,
+):
+    """Возвращает HTML-безопасный отчёт, который помещается в Telegram."""
+    lines = [
+        "🏁 <b>база расписаний обновлена</b>",
+        f"👥 групп в базе: <b>{group_count}</b>",
+    ]
+    if downloaded_schedules is not None:
+        lines.append(
+            f"📥 скачано: {downloaded_schedules} расписаний, "
+            f"{downloaded_retakes} пересдач"
+        )
+    if preserved_groups:
+        lines.append(f"🛡️ сохранено из предыдущей базы: <b>{preserved_groups}</b>")
+
+    errors = _unique_errors(errors)
+    if not errors:
+        return "\n".join(lines + ["✅ ошибок чтения нет."])
+
+    lines.extend(["", f"⚠️ <b>пропущены файлы и листы: {len(errors)}</b>"])
+    report = "\n".join(lines)
+    max_length = 3800  # log_to_admin добавляет служебный HTML-префикс.
+    for index, error in enumerate(errors):
+        escaped_error = html.escape(str(error), quote=False)
+        if len(escaped_error) > 500:
+            escaped_error = f"{escaped_error[:497]}…"
+        entry = f"\n• {escaped_error}"
+        if len(report) + len(entry) <= max_length:
+            report += entry
             continue
 
-    if temp_db:
-        schedule_db, group_to_file = temp_db, temp_mapping
-        log_to_admin(f"🏁 база обновлена! групп: {len(schedule_db)}")
+        omitted = len(errors) - index
+        suffix = f"\n• … и ещё {omitted}"
+        return f"{report[:max_length - len(suffix)]}{suffix}"
+    return report
 
-    load_retakes_from_local()
-    update_caches()
-    is_updating = False
-    return True
+
+def _write_preserved_groups(filepath, groups):
+    """Записывает снимок групп в XLSX, если исходный файл уже недоступен."""
+    used_sheet_names = set()
+    with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+        for index, group in enumerate(groups):
+            sheet_name = group[:31]
+            while sheet_name in used_sheet_names:
+                suffix = f"-{index}"
+                sheet_name = f"{group[:31 - len(suffix)]}{suffix}"
+            used_sheet_names.add(sheet_name)
+            schedule_db[group].to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+def _academic_years_from_dates(df):
+    if df.columns[0] != 'Дата':
+        return set()
+    return {
+        date.year if date.month >= 8 else date.year - 1
+        for value in df['Дата']
+        if (date := _dated_schedule_date(value)) is not None
+    }
+
+
+def _academic_year_for_schedule(df):
+    """Использует только даты занятий: имя файла может означать год набора."""
+    years = _academic_years_from_dates(df)
+    return next(iter(years)) if len(years) == 1 else None
+
+
+def _fresh_academic_year(fresh_db):
+    years = set().union(*(_academic_years_from_dates(df) for df in fresh_db.values()))
+    return next(iter(years)) if len(years) == 1 else None
+
+
+def _preserve_missing_schedules(staged_schedules, fresh_db, fresh_mapping):
+    """Сохраняет недостающие после ошибок группы в staging и проверяет их.
+
+    Скопированные файлы получают имя с ``!``: при следующем запуске они будут
+    прочитаны раньше свежих файлов с числовым префиксом, поэтому свежие данные
+    для одной и той же группы всегда имеют приоритет.
+    """
+    new_year = _fresh_academic_year(fresh_db)
+    missing_groups = sorted(
+        group for group in set(schedule_db) - set(fresh_db)
+        if new_year is None or (
+            old_year := _academic_year_for_schedule(schedule_db[group])
+        ) is None or old_year >= new_year
+    )
+    discarded_old_groups = (set(schedule_db) - set(fresh_db)) - set(missing_groups)
+    if not missing_groups:
+        return fresh_db, fresh_mapping, [], 0
+
+    copied_sources = {}
+    groups_without_copy = []
+    for group in missing_groups:
+        source = group_to_file.get(group)
+        destination = copied_sources.get(source)
+        if not discarded_old_groups and destination is None and source and os.path.isfile(source):
+            destination = os.path.join(
+                staged_schedules,
+                f"!preserved-{len(copied_sources):03d}-{os.path.basename(source)}",
+            )
+            try:
+                shutil.copy2(source, destination)
+            except Exception:
+                destination = None
+            copied_sources[source] = destination
+
+        if destination:
+            continue
+        groups_without_copy.append(group)
+
+    if groups_without_copy:
+        _write_preserved_groups(
+            os.path.join(staged_schedules, "!preserved-memory.xlsx"),
+            groups_without_copy,
+        )
+
+    verified_db, verified_mapping, verification_errors = _load_schedules_from_dir(staged_schedules)
+    unresolved_groups = [group for group in missing_groups if group not in verified_db]
+    if unresolved_groups:
+        _write_preserved_groups(
+            os.path.join(staged_schedules, "!preserved-recovery.xlsx"),
+            unresolved_groups,
+        )
+        verified_db, verified_mapping, recovery_errors = _load_schedules_from_dir(staged_schedules)
+        verification_errors.extend(recovery_errors)
+        unresolved_groups = [group for group in missing_groups if group not in verified_db]
+
+    if unresolved_groups:
+        raise RuntimeError(
+            "не удалось сохранить группы для следующего запуска: "
+            + ", ".join(unresolved_groups)
+        )
+
+    return verified_db, verified_mapping, _unique_errors(verification_errors), len(missing_groups)
+
+
+def load_from_local():
+    """Публикует локальные расписания или скачивает базу при первом запуске."""
+    global schedule_db, group_to_file, is_updating
+    is_updating = True
+    try:
+        temp_db, temp_mapping, errors = _load_schedules_from_dir(SCHEDULES_DIR)
+        if not temp_db:
+            if not any(os.path.exists(path) for path in (SCHEDULES_DIR, RETAKES_DIR)):
+                log_to_admin("📥 локальные данные отсутствуют: выполняю первоначальную загрузку")
+                return download_schedules()
+            log_to_admin("⚠️ база расписаний не обновлена: не распознано ни одной группы")
+            return False
+
+        schedule_db, group_to_file = temp_db, temp_mapping
+        load_retakes_from_local()
+        update_caches()
+        log_to_admin(_format_schedule_update_report(len(schedule_db), errors))
+        return True
+    finally:
+        is_updating = False
+
+
+def _is_retake_url(url):
+    filename = urllib.parse.unquote(urllib.parse.urlparse(url).path).lower()
+    return any(word in filename for word in ('повтор', 'пересдач', 'аттестац'))
+
+
+def _download_filename(url, index):
+    filename = os.path.basename(urllib.parse.unquote(urllib.parse.urlparse(url).path))
+    if not filename:
+        raise ValueError("в ссылке нет имени файла")
+    return f"{index:03d}_{filename}"
+
+
+def _replace_data_directories(staging_dir):
+    """Подменяет оба каталога и восстанавливает старые данные при сбое."""
+    replacements = []
+    for real_dir in (SCHEDULES_DIR, RETAKES_DIR):
+        name = os.path.basename(os.path.normpath(real_dir))
+        replacements.append((real_dir, os.path.join(staging_dir, name)))
+
+    completed = []
+    try:
+        for real_dir, staged_dir in replacements:
+            backup_dir = f"{real_dir}.backup-{os.path.basename(staging_dir)}"
+            had_old_dir = os.path.exists(real_dir)
+            if had_old_dir:
+                os.rename(real_dir, backup_dir)
+            try:
+                os.rename(staged_dir, real_dir)
+            except Exception:
+                if had_old_dir and os.path.exists(backup_dir):
+                    os.rename(backup_dir, real_dir)
+                raise
+            completed.append((real_dir, staged_dir, backup_dir, had_old_dir))
+    except Exception:
+        for real_dir, staged_dir, backup_dir, had_old_dir in reversed(completed):
+            if os.path.exists(real_dir):
+                os.rename(real_dir, staged_dir)
+            if had_old_dir and os.path.exists(backup_dir):
+                os.rename(backup_dir, real_dir)
+        raise
+    else:
+        for _, _, backup_dir, had_old_dir in completed:
+            if had_old_dir and os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def download_schedules():
-    global is_updating, schedule_db, group_to_file, retake_db
+    """Скачивает полный набор и публикует распознанные расписания.
+
+    Ошибочные файлы и листы не отменяют обновление. В этом случае группы,
+    которых нет в свежих данных, сохраняются из опубликованной базы в staging.
+    """
+    global schedule_db, group_to_file, is_updating
     is_updating = True
-    log_to_admin("🔄 запуск полного обновления базы")
-
-    # 1. снимок текущего расписания для отслеживания изменений
-    group_users = get_users_by_group()
-    relevant_groups = set(group_users.keys())
-    old_snapshot = snapshot_schedules(relevant_groups)
-
-    # 2. подготовка временных директорий для безопасного скачивания
-    temp_sch_dir = SCHEDULES_DIR + '_tmp'
-    temp_ret_dir = RETAKES_DIR + '_tmp'
-
-    for d in [temp_sch_dir, temp_ret_dir]:
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d)
-
-    # 3. скачивание с бесконечным retry при 0 расписаний
-    sch_count = 0
-    ret_count = 0
-    attempt = 0
-
-    while True:
-        attempt += 1
-
-        # при повторной попытке очищаем временные директории
-        if attempt > 1:
-            for d in [temp_sch_dir, temp_ret_dir]:
-                for f in glob.glob(os.path.join(d, "*")):
-                    try:
-                        os.remove(f)
-                    except Exception:
-                        pass
-
+    staging_dir = None
+    try:
+        log_to_admin("🔄 запуск полного обновления базы")
         urls = get_all_schedule_links()
-        if not urls:
-            delay = min(DOWNLOAD_RETRY_DELAY * attempt, DOWNLOAD_MAX_DELAY)
-            log_to_admin(f"⚠️ попытка {attempt}: не найдено ссылок, повтор через {delay} сек...")
-            time.sleep(delay)
-            continue
+        schedule_urls = [url for url in urls if not _is_retake_url(url)]
+        if not schedule_urls:
+            log_to_admin("⚠️ не найдено ссылок на расписание; текущая база сохранена")
+            return False
 
-        sch_count = 0
-        ret_count = 0
+        parent_dir = os.path.dirname(os.path.abspath(SCHEDULES_DIR))
+        staging_dir = tempfile.mkdtemp(prefix='rgukbot-update-', dir=parent_dir)
+        staged_schedules = os.path.join(staging_dir, os.path.basename(os.path.normpath(SCHEDULES_DIR)))
+        staged_retakes = os.path.join(staging_dir, os.path.basename(os.path.normpath(RETAKES_DIR)))
+        os.makedirs(staged_schedules)
+        os.makedirs(staged_retakes)
 
-        log_to_admin(f"📥 попытка {attempt}: скачивание ({len(urls)} ссылок)")
-        for url in urls:
-            filename = urllib.parse.unquote(url.split('/')[-1])
-            is_retake = any(w in filename.lower() for w in ('повтор', 'пересдач', 'аттестац'))
-            target_dir = temp_ret_dir if is_retake else temp_sch_dir
+        failed_urls = []
+        downloaded_schedules = 0
+        downloaded_retakes = 0
+        log_to_admin(f"📥 начинаю скачивание {len(urls)} файлов расписаний и пересдач")
+        for index, url in enumerate(urls):
+            is_retake = _is_retake_url(url)
+            target_dir = staged_retakes if is_retake else staged_schedules
             try:
-                resp = requests.get(url, timeout=25, verify=False)
-                if resp.status_code == 200:
-                    with open(os.path.join(target_dir, filename), 'wb') as f:
-                        f.write(resp.content)
-                    if is_retake:
-                        ret_count += 1
-                    else:
-                        sch_count += 1
-            except Exception:
-                pass
+                response = requests.get(url, timeout=25, verify=False)
+                if response.status_code != 200:
+                    raise RuntimeError(f"HTTP {response.status_code}")
+                if not response.content:
+                    raise RuntimeError("получен пустой файл")
+                filename = _download_filename(url, index)
+                with open(os.path.join(target_dir, filename), 'wb') as file:
+                    file.write(response.content)
+                if is_retake:
+                    downloaded_retakes += 1
+                else:
+                    downloaded_schedules += 1
+            except Exception as error:
+                failed_urls.append(url)
+                log_to_admin(f"⚠️ не удалось скачать {url}: {error}")
 
-        if sch_count > 0:
-            log_to_admin(f"✅ скачано: {sch_count} расписаний, {ret_count} пересдач")
-            break
+        if failed_urls or downloaded_schedules != len(schedule_urls):
+            log_to_admin(
+                "⚠️ набор расписаний скачан не полностью; текущая база и файлы сохранены "
+                f"({len(failed_urls)} ошибок)"
+            )
+            return False
 
-        delay = min(DOWNLOAD_RETRY_DELAY * attempt, DOWNLOAD_MAX_DELAY)
-        log_to_admin(f"⚠️ попытка {attempt}: скачано 0 расписаний! повтор через {delay} сек...")
-        time.sleep(delay)
+        temp_db, temp_mapping, errors = _load_schedules_from_dir(staged_schedules)
+        if not temp_db:
+            log_to_admin(
+                "⚠️ новый набор расписаний не опубликован: не распознано ни одной группы; "
+                "текущая база и файлы сохранены"
+            )
+            return False
 
-    # 4. замена старых директорий на новые (атомарная подмена)
-    for real_dir, tmp_dir in [(SCHEDULES_DIR, temp_sch_dir), (RETAKES_DIR, temp_ret_dir)]:
-        if os.path.exists(real_dir):
-            shutil.rmtree(real_dir)
-        os.rename(tmp_dir, real_dir)
+        preserved_groups = 0
+        if errors:
+            temp_db, temp_mapping, preservation_errors, preserved_groups = _preserve_missing_schedules(
+                staged_schedules,
+                temp_db,
+                temp_mapping,
+            )
+            errors = _unique_errors(errors + preservation_errors)
 
-    # 5. загрузка данных из файлов
-    load_from_local()
+        if not temp_db:
+            log_to_admin("⚠️ новый набор расписаний не опубликован: не распознано ни одной группы")
+            return False
 
-    # 6. проверка изменений и уведомления (в отдельном потоке)
-    if schedule_db:
-        new_snapshot = snapshot_schedules(relevant_groups)
-        Thread(target=notify_schedule_changes, args=(old_snapshot, new_snapshot, group_users), daemon=True).start()
-    else:
-        log_to_admin("⚠️ после загрузки schedule_db пуст, уведомления пропущены")
+        _replace_data_directories(staging_dir)
+        final_mapping = {
+            group: os.path.join(SCHEDULES_DIR, os.path.basename(filepath))
+            for group, filepath in temp_mapping.items()
+        }
+        schedule_db, group_to_file = temp_db, final_mapping
+        load_retakes_from_local()
+        update_caches()
+        log_to_admin(
+            _format_schedule_update_report(
+                len(schedule_db),
+                errors,
+                downloaded_schedules=downloaded_schedules,
+                downloaded_retakes=downloaded_retakes,
+                preserved_groups=preserved_groups,
+            )
+        )
+        return True
+    except Exception as error:
+        log_to_admin(f"⚠️ обновление базы отменено: {error}. Текущие данные сохранены")
+        return False
+    finally:
+        if staging_dir and os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        is_updating = False
 
 
-DOWNLOAD_RETRY_DELAY = 30   # базовая задержка в секундах
-DOWNLOAD_MAX_DELAY = 300    # максимальная задержка (5 минут)
-
-UPDATE_HOURS = [(6, 0), (14, 0), (21, 0)]
-
-
-def scheduled_updater():
+def midnight_updater():
     while True:
         now = datetime.datetime.now()
-        candidates = []
-        for h, m in UPDATE_HOURS:
-            t = now.replace(hour=h, minute=m, second=0, microsecond=0)
-            if t > now:
-                candidates.append(t)
-            else:
-                candidates.append(t + datetime.timedelta(days=1))
-        next_run = min(candidates)
-        sleep_sec = (next_run - now).total_seconds()
-        time.sleep(sleep_sec)
+        target = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(0, 0, 5))
+        time.sleep((target - now).total_seconds())
         download_schedules()
-
 
 
 # --- генерация расписания ---
@@ -790,28 +1086,30 @@ def generate_text(group, date):
     wt = get_week_type(date)
     header = f"📅 {DAY_NAMES[date.weekday()]}, {date.strftime('%d.%m.%Y')}\n🔄 {wt} неделя\nгруппа: {group.lower()}\n\n"
     footer = f"\n\n<i>{get_update_time(group)}</i>"
-    if date.weekday() == 6: return header + "🎉 выходной" + footer
+    if date.weekday() == 6 and df.columns[0] != 'Дата':
+        return header + "🎉 выходной" + footer
 
-    day_df = df[df[df.columns[0]] == DAY_SHORTS.get(date.weekday())]
+    day_df = _rows_for_date(df, date)
     if day_df.empty: return header + "🏖 пар нет" + footer
 
     lessons = []
-    for _, row in day_df.iterrows():
+    for row, position in _lesson_rows(day_df):
         try:
             tm = str(row.iloc[2]).strip()
             if len(tm) < 5 or 'nan' in tm.lower(): continue
             info = extract_row_lesson(row, wt)
             if not info['sub']: continue
-            lessons.append({'time': tm, 'num': get_lesson_number(tm), **info})
+            lessons.append({'time': tm, **position, **info})
         except Exception:
             continue
 
-    merged = merge_lesson_halves(lessons, ('sub', 'room'))
+    merged = merge_lesson_halves(lessons)
     if not merged: return header + "🏖 пар нет" + footer
 
     res = ""
     for l in merged:
-        res += format_lesson(l, f"{l['num']} ({l['time']})")
+        res += f"{_lesson_heading(l['num'], l['half'])} ({l['time']})\n"
+        res += _format_lesson_body(l['sub'], l['type'], l['tea'], l['room'])
     return header + res.strip() + footer
 
 
@@ -821,35 +1119,38 @@ def generate_retakes_text(group):
         return "график пересдач для твоей группы не был найден. к сожалению, формат графиков пересдач не унифицирован и файл с ним часто бывает в формате .pdf, с чем этот бот работать не умеет, поэтому посети сайт https://rguk.ru/students/schedule/ и поищи свой график там"
 
     entries_sorted = sorted(entries, key=lambda x: (x['date'], x['time']))
-    merged = merge_lesson_halves(entries_sorted, ('date', 'sub', 'room'))
+    merged = merge_lesson_halves(entries_sorted)
 
     res = f"📑 <b>расписание пересдач для группы {group.lower()}:</b>\n\n"
     for l in merged:
-        res += format_lesson(l, f"📅 {l['date']} | ⏰ {l['time']}")
-    return res + f"<i>{global_update_time_ret}</i>"
+        res += f"📅 {l['date']} | ⏰ {l['time']}\n"
+        res += _format_lesson_body(l['sub'], l['type'], l['tea'], l['room'])
+
+    footer = f"<i>{global_update_time_ret}</i>"
+    return res + footer
 
 
 def generate_teacher_text(teacher_full_name, date):
-    if teacher_full_name.lower() in ("преподаватель кафедры", "препод. кафедры"):
+    if teacher_full_name.lower() in _REJECTED_TEACHERS:
         return "❌ не смешно"
     wt = get_week_type(date)
     all_merged_lessons = []
     teacher_lower = teacher_full_name.strip().lower()
 
     for gr, df in schedule_db.items():
-        day_df = df[df[df.columns[0]] == DAY_SHORTS.get(date.weekday())]
+        day_df = _rows_for_date(df, date)
         group_lessons = []
-        for _, row in day_df.iterrows():
+        for row, position in _lesson_rows(day_df):
             try:
                 info = extract_row_lesson(row, wt)
                 if info['tea'] != teacher_lower: continue
                 tm = str(row.iloc[2]).strip()
                 if len(tm) < 5: continue
-                group_lessons.append({'time': tm, 'num': get_lesson_number(tm), 'sub': info['sub'],
+                group_lessons.append({'time': tm, **position, 'sub': info['sub'],
                                       'room': info['room'], 'type': info['type'], 'group': gr})
             except Exception:
                 continue
-        merged_grp = merge_lesson_halves(group_lessons, ('sub', 'room'))
+        merged_grp = merge_lesson_halves(group_lessons)
         all_merged_lessons.extend(merged_grp)
 
     header = f"👨‍🏫 <b>{teacher_full_name.lower()}</b>\n📅 {DAY_NAMES[date.weekday()]}, {date.strftime('%d.%m.%Y')}\n🔄 {wt} неделя\n\n"
@@ -858,16 +1159,14 @@ def generate_teacher_text(teacher_full_name, date):
 
     grouped = {}
     for m in all_merged_lessons:
-        key = (m['time'], m['num'], m['sub'], m['room'], m['type'])
+        key = (m['time'], m['num'], m['half'], m['sub'], m['room'], m['type'])
         if key not in grouped: grouped[key] = set()
         grouped[key].add(m['group'])
 
-    flat = sorted(
-        [{'time': k[0], 'num': k[1], 'sub': k[2], 'room': k[3], 'type': k[4], 'groups': sorted(g)}
-         for k, g in grouped.items()], key=lambda x: x['time'])
     res = ""
-    for l in flat:
-        res += format_lesson(l, f"{l['num']} ({l['time']}) — гр. {', '.join(l['groups'])}", show_tea=False)
+    for (tm, num, half, sub, room, tp), groups in sorted(grouped.items(), key=lambda item: item[0][0]):
+        res += f"{_lesson_heading(num, half)} ({tm}) — гр. {', '.join(sorted(groups))}\n"
+        res += _format_lesson_body(sub, tp, room=room)
     return header + res.strip() + footer
 
 
@@ -878,14 +1177,17 @@ def generate_room_text(room, date):
               f"🔄 {wt} неделя\n\n")
     footer = f"\n\n<i>{global_update_time_sch}</i>"
 
-    if date.weekday() == 6:
+    if date.weekday() == 6 and not any(
+        df.columns[0] == 'Дата' and not _rows_for_date(df, date).empty
+        for df in schedule_db.values()
+    ):
         return header + "🎉 выходной — аудитория свободна весь день" + footer
 
     room_lower = room.strip().lower()
-    occupied = []
+    grouped = {}
     for gr, df in schedule_db.items():
-        day_df = df[df[df.columns[0]] == DAY_SHORTS.get(date.weekday())]
-        for _, row in day_df.iterrows():
+        day_df = _rows_for_date(df, date)
+        for row, position in _lesson_rows(day_df):
             try:
                 tm = str(row.iloc[2]).strip()
                 if len(tm) < 5 or 'nan' in tm.lower():
@@ -893,27 +1195,17 @@ def generate_room_text(room, date):
                 info = extract_row_lesson(row, wt)
                 if info['room'].lower() != room_lower or not info['sub']:
                     continue
-                occupied.append({
-                    'time': tm,
-                    'num': get_lesson_number(tm),
-                    'sub': info['sub'],
-                    'tea': info['tea'],
-                    'type': info['type'],
-                    'group': gr
-                })
+                key = (tm, position['num'], position['half'], info['sub'], info['tea'], info['type'])
+                if key not in grouped:
+                    grouped[key] = {'time': tm, **position,
+                                    'sub': info['sub'], 'tea': info['tea'],
+                                    'type': info['type'], 'groups': set()}
+                grouped[key]['groups'].add(gr)
             except Exception:
                 continue
 
-    grouped = {}
-    for o in occupied:
-        key = (o['time'], o['sub'], o['tea'], o['type'])
-        if key not in grouped:
-            grouped[key] = {'time': o['time'], 'num': o['num'], 'sub': o['sub'],
-                            'tea': o['tea'], 'type': o['type'], 'groups': set()}
-        grouped[key]['groups'].add(o['group'])
-
     flat = sorted(grouped.values(), key=lambda x: x['time'])
-    merged = merge_lesson_halves(flat, ('tea', 'type', 'groups'))
+    merged = merge_lesson_halves(flat, ('groups',))
 
     occupied_slot_nums = set()
     for l in merged:
@@ -926,7 +1218,8 @@ def generate_room_text(room, date):
         res += "<b>занято:</b>\n\n"
         for l in merged:
             groups_str = ", ".join(sorted(l['groups']))
-            res += format_lesson(l, f"{l['num']} ({l['time']}) — гр. {groups_str}", show_room=False)
+            res += f"{_lesson_heading(l['num'], l['half'])} ({l['time']}) — гр. {groups_str}\n"
+            res += _format_lesson_body(l['sub'], l['type'], tea=l['tea'])
 
     free_slots = [s for i, s in enumerate(LESSON_SLOTS) if i not in occupied_slot_nums]
     if free_slots:
@@ -943,20 +1236,33 @@ def generate_room_text(room, date):
 
 # --- обработчики бота ---
 
+def _check_cancel(m, text):
+    if m.text.lower() == "❌ отмена":
+        bot.send_message(m.chat.id, text, reply_markup=main_kb())
+        return True
+    return False
+
+
+def admin_only(denial=None):
+    def decorate(func):
+        @wraps(func)
+        def wrapper(m):
+            if m.from_user.id == ADMIN_ID:
+                return func(m)
+            if denial:
+                bot.send_message(m.chat.id, denial)
+        return wrapper
+    return decorate
+
+
 @bot.message_handler(func=lambda m: is_updating)
 def bot_blocked(m):
     bot.send_message(m.chat.id, "⏳ идет обновление базы данных, пожалуйста, подожди")
 
 
-@bot.callback_query_handler(func=lambda c: is_updating)
-def callback_blocked(c):
-    bot.answer_callback_query(c.id, "⏳ идет обновление базы данных, пожалуйста, подожди", show_alert=True)
-
-
-
 @bot.message_handler(commands=['info'])
+@admin_only()
 def admin_info(m):
-    if m.from_user.id != ADMIN_ID: return
     files_sch = os.listdir(SCHEDULES_DIR) if os.path.exists(SCHEDULES_DIR) else []
     files_ret = os.listdir(RETAKES_DIR) if os.path.exists(RETAKES_DIR) else []
 
@@ -972,45 +1278,43 @@ def admin_info(m):
 
 
 @bot.message_handler(commands=['achtung'])
+@admin_only("⛔️ у тебя нет прав на использование этой команды")
 def admin_broadcast(m):
-    if m.from_user.id == ADMIN_ID:
-        text = m.text.replace('/achtung', '').strip()
-        if not text:
-            help_text = ("ты не ввел текст для рассылки\n\n"
-                         "использование: /achtung <текст>\n"
-                         "примеры использования html:\n"
-                         "<b>жирный</b>\n"
-                         "<i>курсив</i>\n"
-                         "<u>подчеркнутый</u>\n"
-                         "<s>зачеркнутый</s>\n"
-                         "<tg-spoiler>спойлер</tg-spoiler>\n"
-                         "<a href='http://example.com'>ссылка</a>\n"
-                         "внимание: теги обязательно закрывать!")
-            bot.send_message(m.chat.id, help_text)
-            return
+    text = m.text.replace('/achtung', '').strip()
+    if not text:
+        help_text = ("ты не ввел текст для рассылки\n\n"
+                     "использование: /achtung <текст>\n"
+                     "примеры использования html:\n"
+                     "<b>жирный</b>\n"
+                     "<i>курсив</i>\n"
+                     "<u>подчеркнутый</u>\n"
+                     "<s>зачеркнутый</s>\n"
+                     "<tg-spoiler>спойлер</tg-spoiler>\n"
+                     "<a href='http://example.com'>ссылка</a>\n"
+                     "внимание: теги обязательно закрывать!")
+        bot.send_message(m.chat.id, help_text)
+        return
 
-        users = get_all_users()
-        success_count = 0
-        bot.send_message(m.chat.id, f"начинаю рассылку для {len(users)} пользователей")
+    users = get_all_users()
+    success_count = 0
+    bot.send_message(m.chat.id, f"начинаю рассылку для {len(users)} пользователей")
 
-        for user_id in users:
-            try:
-                bot.send_message(user_id, text, parse_mode='HTML')
-                success_count += 1
-                time.sleep(0.05)
-            except Exception:
-                delete_user(user_id)
+    for user_id in users:
+        try:
+            bot.send_message(user_id, text, parse_mode='HTML')
+            success_count += 1
+            time.sleep(0.05)
+        except Exception:
+            delete_user(user_id)
 
-        bot.send_message(m.chat.id, f"✅ рассылка завершена, доставлено: {success_count} из {len(users)}")
-    else:
-        bot.send_message(m.chat.id, "⛔️ у тебя нет прав на использование этой команды")
+    bot.send_message(m.chat.id, f"✅ рассылка завершена, доставлено: {success_count} из {len(users)}")
 
 
 @bot.message_handler(commands=['update'])
+@admin_only()
 def admin_update(m):
-    if m.from_user.id == ADMIN_ID:
-        bot.send_message(m.chat.id, "🔄 запуск обновления")
-        Thread(target=download_schedules, daemon=True).start()
+    bot.send_message(m.chat.id, "🔄 запуск обновления")
+    Thread(target=download_schedules, daemon=True).start()
 
 
 @bot.message_handler(commands=['delete'])
@@ -1037,59 +1341,61 @@ def teacher_search_start(m):
     bot.register_next_step_handler(msg, teacher_name_filter)
 
 
-def _do_search(m, items, sel_prefix, view_type, next_step_fn, min_len=1):
-    """Общая логика поиска: фильтрация, выбор из нескольких, показ результата."""
+def _entity_search_filter(m, view_type):
+    if _check_cancel(m, "❌ поиск отменен"): return
     q = m.text.strip().lower()
+    if view_type == 't':
+        if q in _REJECTED_TEACHERS:
+            bot.send_message(m.chat.id, "❌ не смешно", reply_markup=main_kb())
+            return
+        cache, min_len, prefix, limit = all_teachers_cache, 3, "teach_sel", 10
+        next_step = teacher_name_filter
+        short_text, noun, found_word = "❌ минимум 3 буквы", "преподаватель", "найден"
+    else:
+        cache, min_len, prefix, limit = all_rooms_cache, 1, "room_sel", 15
+        next_step = process_room_search
+        short_text, noun, found_word = "❌ введи хотя бы 1 символ", "аудитория", "найдена"
     if len(q) < min_len:
-        label = "буквы" if min_len >= 3 else "символ"
-        msg = bot.send_message(m.chat.id, f"❌ минимум {min_len} {label}", reply_markup=cancel_kb())
-        bot.register_next_step_handler(msg, next_step_fn)
+        msg = bot.send_message(m.chat.id, short_text, reply_markup=cancel_kb())
+        bot.register_next_step_handler(msg, next_step)
         return
 
-    found = sorted(t for t in items if q in t.lower())
+    found = [value for value in cache if q in value.lower()]
+    if view_type == 'r': found.sort()
     if not found:
-        bot.send_message(m.chat.id, "❌ не найдено", reply_markup=main_kb())
+        bot.send_message(m.chat.id, f"❌ {noun} не {found_word}", reply_markup=main_kb())
     elif len(found) > 1:
-        kb = make_selection_kb(found, sel_prefix)
+        kb = make_selection_kb(found, prefix, max_items=limit)
         bot.send_message(m.chat.id, "❗ найдено несколько, выбери:", reply_markup=cancel_kb())
         bot.send_message(m.chat.id, "варианты:", reply_markup=kb)
-        bot.register_next_step_handler(m, next_step_fn)
+        bot.register_next_step_handler(m, next_step)
     else:
         bot.clear_step_handler_by_chat_id(m.chat.id)
-        bot.send_message(m.chat.id, "✅ найдено", reply_markup=main_kb())
+        bot.send_message(m.chat.id, f"✅ {noun} {found_word}", reply_markup=main_kb())
         text, kb = get_schedule_view(view_type, found[0], get_target_date())
         bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
 
 
-def _sel_callback(c, view_type):
-    """Общий обработчик выбора из inline-кнопок."""
+def teacher_name_filter(m):
+    _entity_search_filter(m, 't')
+
+
+def _entity_sel_callback(c, view_type):
     bot.answer_callback_query(c.id)
     bot.clear_step_handler_by_chat_id(c.message.chat.id)
     name = c.data.split('|')[1]
-    bot.send_message(c.message.chat.id, "✅ выбрано", reply_markup=main_kb())
+    if view_type == 't' and name.lower() in _REJECTED_TEACHERS:
+        bot.send_message(c.message.chat.id, "❌ не смешно", reply_markup=main_kb())
+        return
+    selected = "✅ расписание выбрано" if view_type == 't' else "✅ аудитория выбрана"
+    bot.send_message(c.message.chat.id, selected, reply_markup=main_kb())
     text, kb = get_schedule_view(view_type, name, get_target_date())
     bot.send_message(c.message.chat.id, text, parse_mode='HTML', reply_markup=kb)
 
 
-def teacher_name_filter(m):
-    if m.text.lower() == "❌ отмена":
-        bot.send_message(m.chat.id, "❌ поиск отменен", reply_markup=main_kb())
-        return
-    if m.text.strip().lower() in ("преподаватель кафедры", "препод. кафедры"):
-        bot.send_message(m.chat.id, "❌ не смешно", reply_markup=main_kb())
-        return
-    _do_search(m, all_teachers_cache, "teach_sel", "t", teacher_name_filter, min_len=3)
-
-
 @bot.callback_query_handler(func=lambda c: c.data.startswith('teach_sel|'))
 def teacher_sel_callback(c):
-    name = c.data.split('|')[1]
-    if name.lower() in ("преподаватель кафедры", "препод. кафедры"):
-        bot.answer_callback_query(c.id)
-        bot.clear_step_handler_by_chat_id(c.message.chat.id)
-        bot.send_message(c.message.chat.id, "❌ не смешно", reply_markup=main_kb())
-        return
-    _sel_callback(c, "t")
+    _entity_sel_callback(c, 't')
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('c|'))
@@ -1104,9 +1410,7 @@ def custom_date_cb(c):
 
 
 def process_custom_date(m, p, target):
-    if m.text.lower() == "❌ отмена":
-        bot.send_message(m.chat.id, "❌ поиск по дате отменен", reply_markup=main_kb())
-        return
+    if _check_cancel(m, "❌ поиск по дате отменен"): return
 
     date = parse_user_date(m.text)
     if date:
@@ -1127,9 +1431,7 @@ def change_grp(m):
 
 
 def handle_group_input(m):
-    if m.text.lower() == "❌ отмена":
-        bot.send_message(m.chat.id, "❌ отменено", reply_markup=main_kb())
-        return
+    if _check_cancel(m, "❌ отменено"): return
     text = m.text.strip().lower()
     found = next((k for k in schedule_db if k.replace("-", "") == text.replace("-", "")), None)
     if found:
@@ -1138,7 +1440,7 @@ def handle_group_input(m):
         text, kb = get_schedule_view('d', found, get_target_date())
         bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
     else:
-        bot.send_message(m.chat.id, "😢 группа не найдена, попробуй еще раз", reply_markup=main_kb())
+        bot.send_message(m.chat.id, "😢 группа не найдена, попробуй еще раз через меню", reply_markup=main_kb())
 
 
 @bot.message_handler(func=lambda m: m.text.lower() == "📅 моё расписание")
@@ -1165,64 +1467,37 @@ def nav_cb_handler(c):
 @bot.message_handler(commands=['start'])
 def start(m):
     msg = (f"привет! 👋\n\nэтот <b>неофициальный</b> бот показывает расписание для студентов ргу им. косыгина\n\n"
-           f"просто <b>напиши название своей группы</b> (например: эби-124) и я тебя запомню!\n"
-           f"после этого ты можешь <b>написать любую дату или день недели</b> "
-           f"(<i>завтра, вчера, среда, 15.09, след пт, 8 декабря</i>) — и я покажу расписание на этот день. \n\n"
-           f"также можно искать <b>расписание преподавателей и свободные аудитории</b> через меню 👇\n\n"
+           f"просто <b>напиши название своей группы</b> (например: эби-124) и я тебя запомню!\n\n\n\n"
            f"<i>⚠️ внимание: бот сохраняет связку твоего id и выбранной группы. ты можешь удалить свои данные в любой момент с помощью команды /delete.</i>")
     bot.send_message(m.chat.id, msg, parse_mode='HTML', reply_markup=main_kb())
 
 
-@bot.message_handler(func=lambda m: m.text.lower() == "🚪 расписание аудитории")
+@bot.message_handler(func=lambda m: m.text.lower() == "🚪 поиск аудитории")
 def room_search_start(m):
     msg = bot.send_message(m.chat.id, "📝 введи номер аудитории:", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, process_room_search)
 
 
 def process_room_search(m):
-    if m.text.lower() == "❌ отмена":
-        bot.send_message(m.chat.id, "❌ поиск отменен", reply_markup=main_kb())
-        return
-    _do_search(m, all_rooms_cache, "room_sel", "r", process_room_search)
+    _entity_search_filter(m, 'r')
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith('room_sel|'))
 def room_sel_callback(c):
-    _sel_callback(c, "r")
+    _entity_sel_callback(c, 'r')
 
 
 @bot.message_handler(func=lambda m: True)
 def last_handle(m):
-    g = get_user_group(m.from_user.id)
-    if g:
-        # Группа уже есть — пробуем распознать дату
-        date = parse_user_date(m.text)
-        if date:
-            text, kb = get_schedule_view('d', g, date)
-            bot.send_message(m.chat.id, text, parse_mode='HTML', reply_markup=kb)
-        else:
-            bot.send_message(
-                m.chat.id,
-                "❌ не удалось распознать дату.\n\n"
-                "<i>попробуй ввести дату цифрами или словами:\n"
-                "'15.09', 'след вт', 'пт через 2 недели', 'среда'</i>",
-                parse_mode='HTML',
-                reply_markup=main_kb()
-            )
-    else:
-        # Группы нет — пробуем установить группу
-        handle_group_input(m)
+    handle_group_input(m)
 
 
 # --- запуск ---
 if __name__ == '__main__':
     init_db()
-    for d in [SCHEDULES_DIR, RETAKES_DIR]:
-        os.makedirs(d, exist_ok=True)
-
     load_from_local()
 
-    Thread(target=scheduled_updater, daemon=True).start()
+    Thread(target=midnight_updater, daemon=True).start()
 
     print("бот запущен и готов к работе!")
     while True:
